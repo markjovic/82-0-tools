@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>82-0 tools</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;600&family=Barlow+Condensed:wght@700&display=swap" rel="stylesheet">
+<style>
+:root{--deep:#1d1d3a;--accent:#fe8000;--chalk:#f6f5f2;--paper:#fff;--ink:#1b1b22;--muted:#5f6070;--line:#dcdbe2;--body:"Barlow",system-ui,sans-serif;--cond:"Barlow Condensed","Arial Narrow",sans-serif}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--chalk:#121218;--paper:#1c1c26;--ink:#ececf2;--muted:#a5a6b5;--line:#2e2e3c}}
+:root[data-theme="dark"]{--chalk:#121218;--paper:#1c1c26;--ink:#ececf2;--muted:#a5a6b5;--line:#2e2e3c}
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}*,*::before,*::after{box-sizing:inherit}
+body{margin:0;background:var(--chalk);color:var(--ink);font:16px/1.55 var(--body)}
+header{background:var(--deep);color:#fff;padding:26px 20px 22px}.wrap{max-width:760px;margin:0 auto}
+h1{font:700 clamp(2.2rem,7vw,3.4rem)/.95 var(--cond);margin:0}h1 span{color:var(--accent)}header p{margin:8px 0 0;color:#cfcfe0;max-width:60ch}
+main{padding:20px}.card{background:var(--paper);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:6px;padding:14px 16px;margin-bottom:16px}
+.btn{font:700 1rem var(--cond);background:var(--accent);color:#fff;border:0;border-radius:6px;padding:9px 14px;cursor:pointer;text-decoration:none;display:inline-block}
+.btn.ghost{background:transparent;color:var(--accent);border:1px dashed var(--accent)}#msg{color:var(--muted);font-size:.9rem;margin-left:8px}
+button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}ol{padding-left:20px}
+</style></head><body>
+<header><div class="wrap"><h1><span>82-0</span> tools</h1><p>An overlay for 82-0.com that records each game you play, so the game's hidden scoring can be worked out and turned into pick advice.</p></div></header>
+<main class="wrap">
+<div class="card"><p><strong>Overlay bookmarklet.</strong> Save it as a bookmark&rsquo;s URL, then run it on 82-0.com before your first pick. It only reads what the game already shows you and sends nothing to the game.</p>
+<button class="btn" id="copy" type="button">Copy bookmarklet</button> <a class="btn ghost" id="drag" href="javascript:(()=&gt;{if(window.r820)return;const s=document.createElement(&#x27;script&#x27;);s.src=&#x27;https://markjovic.github.io/82-0-tools/overlay82.js?v=&#x27;+Date.now();s.onerror=()=&gt;alert(&#x27;82-0 overlay could not be loaded from markjovic.github.io (blocked or missing).&#x27;);document.head.append(s)})()">Drag to bookmarks bar</a><span id="msg" aria-live="polite"></span></div>
+<div class="card"><p><strong>Where it&rsquo;s up to.</strong> 82-0 works out your record on its own server, so the formula isn&rsquo;t visible. The overlay logs every finished game in your browser; after about 30 games, export the log and the scoring can be fitted from it.</p></div>
+</main>
+<script>
+const BOOKMARKLET = "javascript:(()=>{if(window.r820)return;const s=document.createElement('script');s.src='https://markjovic.github.io/82-0-tools/overlay82.js?v='+Date.now();s.onerror=()=>alert('82-0 overlay could not be loaded from markjovic.github.io (blocked or missing).');document.head.append(s)})()";
+document.getElementById('copy').addEventListener('click', async () => {
+  const m = document.getElementById('msg');
+  try { await navigator.clipboard.writeText(BOOKMARKLET); m.textContent = 'Copied ' + BOOKMARKLET.length + ' characters.'; }
+  catch (e) { m.textContent = 'Copy failed (' + e.message + '). Long-press the drag button and copy its link instead.'; }
+});
+document.getElementById('drag').addEventListener('click', e => { e.preventDefault(); document.getElementById('msg').textContent = 'Drag this button to your bookmarks bar, or use Copy.'; });
+</script></body></html>
