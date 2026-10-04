@@ -5,14 +5,14 @@
 (() => {
   if (window.r820) return;
   window.r820 = 1;
-  const VERSION = 'v4';
+  const VERSION = 'v6';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
-  // Refitted 5 Oct 2026 from 42 games (scores 69.8-106.8): team score = sum of player values + BASE.
+  // Refitted 5 Oct 2026 from 52 games (scores 69.8-106.8): team score = sum of player values + BASE.
   // A player with no steals/blocks on record (1960s, early 1970s) gets NO_DEF instead. Leave-one-out error about 0.4.
-  const MODEL = { ppg: 0.350, rpg: 0.630, apg: 0.585, spg: 1.403, bpg: 1.493, NO_DEF: 2.750, BASE: -2.323, GAMES: 42 };
-  // Score to wins: a power curve that matches all 42 games exactly (a straight line missed the 102.7 game).
+  const MODEL = { ppg: 0.354, rpg: 0.629, apg: 0.582, spg: 1.344, bpg: 1.459, NO_DEF: 2.680, BASE: -2.199, GAMES: 52 };
+  // Score to wins: a power curve that matches all 52 games exactly (a straight line missed the 102.7 game).
   // 82 wins needs a score between 118.9 and 119.5; the upper end is used. Beyond the highest seen, 106.8.
   const winsFor = s => Math.max(0, Math.min(82, Math.round(82 * Math.pow(Math.max(0, s) / 119.9, 1.155))));
   const SCORE_82 = 119.46;
@@ -92,7 +92,7 @@
     const placed = SLOTS.filter(s => picks[s]), open = SLOTS.filter(s => !picks[s]);
     const used = new Set(placed.map(s => String(picks[s].player_id)));
     const base = placed.reduce((a, s) => a + val(picks[s]), 0);
-    const sig = placed.map(s => s + picks[s].player_id).join() + '|' + cell.team?.team_id + cell.era + '|' + squads().length + '|' + rerolls.team + rerolls.era;
+    const sig = placed.map(s => s + picks[s].player_id).join() + '|' + cell.team?.team_id + cell.era + '|' + squads().length + '|' + rerolls.team + rerolls.era + '|' + JSON.stringify(cell.boosters || null);
     if (sig === cache.sig) return cache;
     const squad = cell.squad || [];
     const cands = []; for (const s of open) squad.filter(p => fits(p, s) && !used.has(String(p.player_id))).map(p => ({ p, s, v: val(p) })).sort((a, b) => b.v - a.v).slice(0, 2).forEach(c => cands.push(c));
@@ -101,13 +101,20 @@
     const qs = squads();
     const clubPool = qs.filter(q => q.era === cell.era && q.team?.team_id !== cell.team?.team_id);
     const eraPool = qs.filter(q => q.team?.team_id === cell.team?.team_id && q.era !== cell.era);
-    const rr = [['Team', clubPool, 'team'], ['Era', eraPool, 'era']].filter(([, pl, key]) => pl.length && !rerolls[key]).map(([name, pl]) => ({ name, n: pl.length, known: seenStart, ...simulate(base, open, used, { pool: pl }, SIMS) }));
+    // Re-roll availability comes from the game itself: each spin lists its boosters with how many uses are left.
+    // next_use is how the next one is paid for ('none' = none left); 'rv' presumably means watching an ad.
+    const boost = key => cell.boosters?.['respin_' + key];
+    const avail = key => { const b = boost(key); if (!b) return !rerolls[key] ? null : false;
+      return !!(b.enabled && (b.next_use && b.next_use !== 'none') && ((+b.remaining || 0) > 0 || (+b.free_left || 0) > 0 || (+b.rv_left || 0) > 0)); };
+    const costNote = key => { const b = boost(key); return b && b.next_use && !['free', 'none'].includes(b.next_use) ? ` (costs: ${b.next_use === 'rv' ? 'watch an ad' : b.next_use})` : ''; };
+    const rr = [['Team', clubPool, 'team'], ['Era', eraPool, 'era']].filter(([, pl, key]) => pl.length && avail(key) !== false)
+      .map(([name, pl, key]) => ({ name, n: pl.length, known: avail(key) === true, cost: costNote(key), ...simulate(base, open, used, { pool: pl }, SIMS) }));
     const reach = maxReach(base, open, used);
     let banner, h = '';
     const better = rr.filter(r => top && (r.p82 - top.p82 >= 0.03 || (top.p82 < 0.005 && r.avg - top.avg >= 1.5))).sort((a, b) => (b.p82 - a.p82) || (b.avg - a.avg))[0];
     if (!top) banner = BAN('#546e7a', '#fff', 'NOTHING TO PICK', 'No player here fits an open position.');
     else if (better) banner = BAN(better.name === 'Era' ? '#7c3aed' : '#f59e0b', better.name === 'Era' ? '#fff' : '#1a1a1a', `RE-ROLL ${better.name.toUpperCase()}`,
-      top.p82 >= 0.005 ? `82-0 chance: ${pct(top.p82)} picking now, ${pct(better.p82)} after the ${better.name.toLowerCase()} re-roll${better.known ? '' : ' (if you still have it)'}.` : `Projected record: ${rec(top.avg)} picking now, ${rec(better.avg)} after the ${better.name.toLowerCase()} re-roll${better.known ? '' : ' (if you still have it)'}.`);
+      top.p82 >= 0.005 ? `82-0 chance: ${pct(top.p82)} picking now, ${pct(better.p82)} after the ${better.name.toLowerCase()} re-roll${better.known ? better.cost : ' (if you still have it)'}.` : `Projected record: ${rec(top.avg)} picking now, ${rec(better.avg)} after the ${better.name.toLowerCase()} re-roll${better.known ? better.cost : ' (if you still have it)'}.`);
     else if (reach !== null && reach < SCORE_82) banner = BAN('#c62828', '#fff', '82-0 OUT OF REACH', `Best possible from here is ${rec(reach)} (from the squads seen so far). Best pick for your record: ${esc(top.p.name)} at ${top.s}, projected ${rec(top.avg)}.`);
     else banner = BAN('#15803d', '#fff', `TAKE ${esc(top.p.name.toUpperCase())} AT ${top.s}`, `Value ${top.v.toFixed(1)}. 82-0 chance ${pct(top.p82)}; projected ${rec(top.avg)}.`);
     h += `<b>${esc(cell.team?.abbr)} ${esc(cell.era)}</b> &middot; open: ${open.join(', ')}`;
@@ -115,7 +122,8 @@
     h += `<br>Choices (82-0 chance, projected record):`;
     for (const c of scored.slice(0, 5)) h += `<br>&nbsp; ${c === top ? '\u2605\u2605 ' : ''}${esc(c.p.name)} at ${c.s} (${c.v.toFixed(1)}): <b>${pct(c.p82)}</b>, ${rec(c.avg)}`;
     for (const r of rr) h += `<br>&nbsp; <span style="color:${r.name === 'Era' ? '#c4b5fd' : '#fcd34d'}">${r.name} re-roll</span>: <b>${pct(r.p82)}</b>, ${rec(r.avg)} <small>(${r.n} squads seen)</small>`;
-    if (rerolls.team && rerolls.era) h += `<br><small>Both re-rolls used.</small>`; else if (rerolls.team || rerolls.era) h += `<br><small>${rerolls.team ? 'Team' : 'Era'} re-roll used.</small>`;
+    const none = ['team', 'era'].filter(k => avail(k) === false).map(k => k === 'team' ? 'Team' : 'Era');
+    if (none.length) h += `<br><small>${none.length === 2 ? 'No re-rolls left' : none[0] + ' re-roll: none left'}${cell.boosters ? ' (per the game)' : ''}.</small>`;
     cache = { sig, banner, h, rec: top };
     return cache;
   }
@@ -157,6 +165,7 @@
             cell = j.cell; result = null;
             if (j.cell.seq === 0 && !act) { picks = {}; rerolls = { team: false, era: false }; seenStart = true; }
             LOG.squads[`${cell.team?.team_id}|${cell.era}`] = { team: cell.team, era: cell.era, squad: cell.squad };
+            if (cell.boosters) LOG.lastBoosters = { at: new Date().toISOString(), legal: cell.legal, boosters: cell.boosters };
           }
           if (j && j.score != null && j.roster) {
             result = j;
