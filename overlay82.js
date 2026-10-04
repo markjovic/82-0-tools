@@ -5,7 +5,7 @@
 (() => {
   if (window.r820) return;
   window.r820 = 1;
-  const VERSION = 'v7';
+  const VERSION = 'v8';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -141,7 +141,7 @@
     const bar = (bg, fg, head, sub) => `<div style="background:${bg};color:${fg};border-radius:6px;padding:8px 10px;margin:-2px -3px 6px">${head}${sub ? `<div style="font:600 12px/1.35 system-ui,sans-serif;margin-top:3px">${sub}</div>` : ''}</div>`;
     const pickHead = c => { const pl = placement(c);
       return { head: `<div style="font:800 11px/1.2 system-ui,sans-serif;letter-spacing:.06em;opacity:.85">TAKE</div><div style="font:800 19px/1.15 system-ui,sans-serif">${esc(c.p.name)} <span style="font-weight:700;opacity:.9">&rarr; ${pl.slot}</span></div>`,
-        sub: `${esc(cell.team?.abbr)} ${esc(cell.era)} &middot; plays ${(c.p.positions || []).join(' / ')} &middot; value ${c.v.toFixed(1)}${pl.moves.length ? `<br><b>Then ${pl.moves.join('; ')}.</b>` : ''}` }; };
+        sub: `plays ${(c.p.positions || []).join(' / ')} &middot; value ${c.v.toFixed(1)}${pl.moves.length ? `<br><b>Then ${pl.moves.join('; ')}.</b>` : ''}` }; };
     if (!top) top_ = bar('#546e7a', '#fff', '<div style="font:800 17px/1.2 system-ui,sans-serif">NOTHING TO PICK</div>', 'No player here can join your team in any arrangement.');
     else if (better) { const era = better.name === 'Era', ph = pickHead(top);
       top_ = bar(era ? '#7c3aed' : '#f59e0b', era ? '#fff' : '#1a1a1a', `<div style="font:800 19px/1.15 system-ui,sans-serif">RE-ROLL ${better.name.toUpperCase()}</div>`,
