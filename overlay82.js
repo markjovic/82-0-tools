@@ -5,7 +5,7 @@
 (() => {
   if (window.r820) return;
   window.r820 = 1;
-  const VERSION = 'v9';
+  const VERSION = 'v10';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -17,6 +17,9 @@
   const winsFor = s => Math.max(0, Math.min(82, Math.round(82 * Math.pow(Math.max(0, s) / 119.9, 1.155))));
   const SCORE_82 = 119.46;
   const SIMS = 800;
+  // Shared squad list published on the site (every club/era squad seen across all logs), merged with this browser's own.
+  const SQUADS_URL = 'https://markjovic.github.io/82-0-tools/squads.json';
+  let SITE = {}, siteNote = 'loading shared squads';
 
   // ---------- log ----------
   const load = () => { try { return JSON.parse(localStorage.getItem(LOG_KEY)) || { games: [], squads: {}, actions: {} }; } catch (e) { return { games: [], squads: {}, actions: {} }; } };
@@ -27,8 +30,8 @@
   // ---------- model ----------
   const val = p => { const s = p?.stats || {}; return STATS.reduce((a, k) => a + MODEL[k] * (+s[k] || 0), 0) + (s.spg == null && s.bpg == null ? MODEL.NO_DEF : 0); };
   const fits = (p, s) => (p.positions || []).includes(s);
-  const squads = () => Object.values(LOG.squads).filter(q => q.squad?.length);
-  const findPlayer = e => { const q = LOG.squads[`${e.team_id}|${e.era}`]; return q?.squad?.find(p => String(p.player_id) === String(e.player_id)) || null; };
+  const squads = () => Object.values({ ...SITE, ...LOG.squads }).filter(q => q.squad?.length);
+  const findPlayer = e => { const q = LOG.squads[`${e.team_id}|${e.era}`] || SITE[`${e.team_id}|${e.era}`]; return q?.squad?.find(p => String(p.player_id) === String(e.player_id)) || null; };
   let PAR = null, parN = 0;
   const par = () => {   // average best value a random squad offers at each position
     const qs = squads(); if (PAR && parN === qs.length) return PAR;
@@ -178,7 +181,8 @@
       body = roster.map(r => `${esc(r.slot)} ${esc(r.player?.name)} ${val(r.player).toFixed(1)}`).join('<br>');
     } else if (cell) { const a = advise(); banner = a.banner; body = a.h; }
     else body = 'Waiting for the next spin or pick. Run this before your first spin so it can follow the whole game.';
-    const foot = `<br><small>${LOG.games.length} games, ${Object.keys(LOG.squads).length} squads logged &middot; <span data-r82="export" style="text-decoration:underline;cursor:pointer">export log</span>${note ? ' &middot; ' + esc(note) : ''}<br>82-0 overlay ${VERSION} &middot; model from ${MODEL.GAMES} games</small>`;
+    const all = Object.keys({ ...SITE, ...LOG.squads }).length, onlyLocal = Object.keys(LOG.squads).filter(k => !SITE[k]).length;
+    const foot = `<br><small>${all} squads in use (${Object.keys(SITE).length} shared${onlyLocal ? `, ${onlyLocal} new on this device` : ''})${siteNote ? ' &middot; ' + esc(siteNote) : ''}<br>${LOG.games.length} games, ${Object.keys(LOG.squads).length} squads logged &middot; <span data-r82="export" style="text-decoration:underline;cursor:pointer">export log</span>${note ? ' &middot; ' + esc(note) : ''}<br>82-0 overlay ${VERSION} &middot; model from ${MODEL.GAMES} games</small>`;
     P.innerHTML = ctl + banner + (mode === 'full' ? body + foot : '');
   }
 
@@ -226,4 +230,7 @@
     return res;
   };
   render();
+  _fetch(SQUADS_URL, { cache: 'no-cache' }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(j => { if (!j || typeof j.squads !== 'object') throw new Error('unexpected format'); SITE = j.squads; siteNote = ''; PAR = null; cache.sig = ''; render(); })
+    .catch(e => { siteNote = 'SHARED SQUADS NOT LOADED (' + e.message + '); using this device only'; render(); });
 })();
