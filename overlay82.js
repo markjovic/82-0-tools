@@ -5,17 +5,17 @@
 (() => {
   if (window.r820) return;
   window.r820 = 1;
-  const VERSION = 'v10';
+  const VERSION = 'v12';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
-  // Refitted 5 Oct 2026 from 75 games (scores 69.8-106.8); leave-one-out error 0.55, no sign of curvature: team score = sum of player values + BASE.
+  // Refitted 5 Oct 2026 from 87 games (scores 69.8-112.0); leave-one-out error 0.54, no sign of curvature: team score = sum of player values + BASE.
   // A player with no steals/blocks on record (1960s, early 1970s) gets NO_DEF instead.
-  const MODEL = { ppg: 0.347, rpg: 0.614, apg: 0.607, spg: 1.259, bpg: 1.508, NO_DEF: 2.880, BASE: -1.230, GAMES: 75 };
-  // Score to wins: a power curve that matches all 75 games exactly (a straight line missed the 102.7 game).
-  // 82 wins needs a score between 118.9 and 119.5; the upper end is used. Beyond the highest seen, 106.8.
+  const MODEL = { ppg: 0.345, rpg: 0.613, apg: 0.621, spg: 1.253, bpg: 1.515, NO_DEF: 2.946, BASE: -1.262, GAMES: 87 };
+  // Score to wins: a power curve that matches all 87 games exactly (a straight line missed the 102.7 game).
+  // 82 wins needs a score between 119.27 and 119.36 (narrowed by the 112.0 game); the upper end is used.
   const winsFor = s => Math.max(0, Math.min(82, Math.round(82 * Math.pow(Math.max(0, s) / 119.9, 1.155))));
-  const SCORE_82 = 119.46;
+  const SCORE_82 = 119.36;
   const SIMS = 800;
   // Shared squad list published on the site (every club/era squad seen across all logs), merged with this browser's own.
   const SQUADS_URL = 'https://markjovic.github.io/82-0-tools/squads.json';
@@ -133,11 +133,14 @@
     const avail = key => { const b = boost(key); if (!b) return !rerolls[key] ? null : false;
       return !!(b.enabled && (b.next_use && b.next_use !== 'none') && ((+b.remaining || 0) > 0 || (+b.free_left || 0) > 0 || (+b.rv_left || 0) > 0)); };
     const costNote = key => { const b = boost(key); return b && b.next_use && !['free', 'none'].includes(b.next_use) ? ` (costs: ${b.next_use === 'rv' ? 'watch an ad' : b.next_use})` : ''; };
-    const rr = [['Team', clubPool, 'team'], ['Era', eraPool, 'era']].filter(([, pl, key]) => pl.length && avail(key) !== false)
-      .map(([name, pl, key]) => ({ name, n: pl.length, known: avail(key) === true, cost: costNote(key), ...simulate(team, { pool: pl }, SIMS) }));
     const reach = maxReach(team);
+    // Re-rolls are only worth spending to chase 82-0: never before 3 players are in place, and only while the team
+    // picked so far can still reach the 82-0 score with the best remaining picks.
+    const rerollOK = team.length >= 3 && reach !== null && reach >= SCORE_82;
+    const rr = !rerollOK ? [] : [['Team', clubPool, 'team'], ['Era', eraPool, 'era']].filter(([, pl, key]) => pl.length && avail(key) !== false)
+      .map(([name, pl, key]) => ({ name, n: pl.length, known: avail(key) === true, cost: costNote(key), ...simulate(team, { pool: pl }, SIMS) }));
     const out = reach !== null && reach < SCORE_82;
-    const better = rr.filter(r => top && (r.p82 - top.p82 >= 0.03 || (top.p82 < 0.005 && r.avg - top.avg >= 1.5))).sort((a, b) => (b.p82 - a.p82) || (b.avg - a.avg))[0];
+    const better = rr.filter(r => top && r.p82 - top.p82 >= 0.03).sort((a, b) => (b.p82 - a.p82) || (b.avg - a.avg))[0];
 
     // TOP BAR = what to do. Blue = take a player; orange/purple = use that re-roll (the game's own button colours).
     let top_ = '';
@@ -162,6 +165,7 @@
     let h = `Picked: ${team.length ? SLOTS.filter(sl => picks[sl]).map(sl => `${sl} ${esc(picks[sl].name)} ${val(picks[sl]).toFixed(1)}`).join(', ') : 'none yet'}`;
     h += `<br>Choices (82-0 chance, projected record):`;
     for (const c of scored.slice(0, 5)) { const pl = placement(c); h += `<br>&nbsp; ${c === top ? '\u2605\u2605 ' : ''}${esc(c.p.name)} &rarr; ${pl.slot}${pl.moves.length ? ' (with a move)' : ''} (${c.v.toFixed(1)}): <b>${pct(c.p82)}</b>, ${rec(c.avg)}`; }
+    if (!rerollOK) h += `<br><small>Re-roll advice: ${team.length < 3 ? `only after 3 players are picked (${team.length} so far)` : '82-0 is no longer reachable with this team, so a re-roll would be wasted'}.</small>`;
     for (const r of rr) h += `<br>&nbsp; <span style="color:${r.name === 'Era' ? '#c4b5fd' : '#fcd34d'}">${r.name} re-roll</span>: <b>${pct(r.p82)}</b>, ${rec(r.avg)} <small>(${r.n} squads seen)</small>`;
     const none = ['team', 'era'].filter(k => avail(k) === false).map(k => k === 'team' ? 'Team' : 'Era');
     if (none.length) h += `<br><small>${none.length === 2 ? 'No re-rolls left' : none[0] + ' re-roll: none left'}${cell.boosters ? ' (per the game)' : ''}.</small>`;
