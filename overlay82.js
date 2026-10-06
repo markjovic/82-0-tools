@@ -5,7 +5,7 @@
 (() => {
   if (window.r820) return;
   window.r820 = 1;
-  const VERSION = 'v19';
+  const VERSION = 'v21';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -44,7 +44,8 @@
   // below 20 (82-0 needs an average of about 24 a player). Recomputed as the squad list grows.
   let ELITE = null, eliteN = 0;
   const elite = () => { const qs = squads(); if (ELITE && eliteN === qs.length) return ELITE; ELITE = {}; eliteN = qs.length;
-    for (const sl of SLOTS) { const v = [...new Map(qs.flatMap(q => q.squad).filter(p => fits(p, sl)).map(p => [p.name, val(p)])).values()].sort((a, b) => b - a);
+    for (const sl of SLOTS) { const best = new Map(); for (const p of qs.flatMap(q => q.squad)) if (fits(p, sl)) best.set(p.name, Math.max(best.get(p.name) ?? -1, val(p)));
+      const v = [...best.values()].sort((a, b) => b - a);
       ELITE[sl] = Math.max(20, v[24] ?? 20); }
     return ELITE; };
   // Rank of a player's value among every player in the known squads who can play that position (each club/era stint
@@ -61,11 +62,13 @@
   const GOLD = '#a16207';   // reserved for a real 82-0 chance (1% or better)
   // Players can be moved between positions after they're picked, so a team is a SET of players that only needs
   // some valid arrangement. assign() finds one, keeping each player in his current position where it can.
-  const assign = (players, cur) => {
+  const assign = (players, cur, slotOrder) => {
     const order = [...players].sort((a, b) => (a.positions || []).length - (b.positions || []).length);
     const res = {};
     const bt = i => { if (i === order.length) return true; const p = order[i], pref = cur?.get(String(p.player_id));
-      const opts = [...(pref ? [pref] : []), ...(p.positions || []).filter(x => x !== pref && SLOTS.includes(x))];
+      let rest = (p.positions || []).filter(x => x !== pref && SLOTS.includes(x));
+      if (!pref && slotOrder) rest = rest.sort(slotOrder);
+      const opts = [...(pref ? [pref] : []), ...rest];
       for (const sl of opts) if (!res[sl] && fits(p, sl)) { res[sl] = p; if (bt(i + 1)) return true; delete res[sl]; }
       return false; };
     return bt(0) ? res : null;
@@ -150,9 +153,26 @@
       (Math.abs(b.p82 - a.p82) >= 0.01 ? b.p82 - a.p82 : 0) || (Math.abs(b.avg - a.avg) >= 0.5 ? b.avg - a.avg : b.v - a.v));
     const top = scored[0] || null;
     // where the pick goes, and which already-picked players have to move to make room
-    const placement = c => { const a = assign([...team, c.p], cur) || {}; const slot = SLOTS.find(sl => a[sl] === c.p);
-      const moves = SLOTS.filter(sl => a[sl] && a[sl] !== c.p && cur.get(String(a[sl].player_id)) !== sl).map(sl => `${esc(a[sl].name)} ${cur.get(String(a[sl].player_id))} &rarr; ${sl}`);
-      return { slot, moves }; };
+    // Where the pick goes. A two-position player goes where 82-0 calibre is cheapest (e.g. PF before C), which keeps
+    // the position with the most valuable players open. Moves on the court are only reported by the game with your
+    // next pick, so the overlay may not know a teammate's current position: instead of "move X from A to B" it says
+    // where each affected teammate must be, ordered so a move into an empty position comes first.
+    const placement = c => {
+      const el = elite(), a = assign([...team, c.p], cur, (x, y) => (el[x] ?? 99) - (el[y] ?? 99)) || {};
+      const slot = SLOTS.find(sl => a[sl] === c.p);
+      const shares = q => (q.positions || []).some(x => (c.p.positions || []).includes(x));
+      const need = SLOTS.filter(sl => a[sl] && a[sl] !== c.p && (cur.get(String(a[sl].player_id)) !== sl || ((a[sl].positions || []).length > 1 && shares(a[sl]))))
+        .map(sl => ({ p: a[sl], to: sl, from: cur.get(String(a[sl].player_id)), moved: cur.get(String(a[sl].player_id)) !== sl }));
+      // order: a move whose target is currently empty first, then moves into positions freed by earlier ones
+      const occupied = new Set([...cur.values()]), ordered = [];
+      let pending = need.filter(m => m.moved), guard = 0;
+      while (pending.length && guard++ < 10) {
+        const ready = pending.filter(m => !occupied.has(m.to)); const next = ready.length ? ready : [pending[0]];
+        for (const m of next) { ordered.push(m); occupied.delete(m.from); occupied.add(m.to); }
+        pending = pending.filter(m => !next.includes(m)); }
+      const moves = ordered.map(m => `${esc(m.p.name)} &rarr; ${m.to}`);
+      const keep = need.filter(m => !m.moved).map(m => `${esc(m.p.name)} at ${m.to}`);
+      return { slot, moves, keep }; };
     const qs = squads();
     const clubPool = qs.filter(q => q.era === cell.era && q.team?.team_id !== cell.team?.team_id);
     const eraPool = qs.filter(q => q.team?.team_id === cell.team?.team_id && q.era !== cell.era);
@@ -182,12 +202,12 @@
       return d <= 0 ? [GOLD, 'S'] : d <= 1 ? ['#047857', 'A+'] : d <= 2 ? ['#16a34a', 'A'] : d <= 3 ? ['#0e7490', 'B'] : d <= 4.5 ? ['#b45309', 'C'] : ['#b91c1c', 'D']; };
     const pickBar = c => { const pl = placement(c), [bg, word] = tier(c);
       const head = `<div style="font:800 11px/1.2 system-ui,sans-serif;letter-spacing:.06em;opacity:.85">${pl.moves.length ? 'MOVE FIRST, THEN TAKE' : 'TAKE'}</div>${big(`${esc(c.p.name)} <span style="font-weight:700;opacity:.9">&rarr; ${pl.slot}</span>`)}`;
-      const sub = `${pl.moves.length ? `<b>First move ${pl.moves.join(', ')}.</b><br>` : ''}${c.v.toFixed(1)} &middot; ${posRank(c.p, pl.slot)}<span style="position:absolute;right:9px;bottom:6px;font:800 15px/1 system-ui,sans-serif" title="S = 82-0 calibre ${pl.slot}; then A+, A, B, C, D">(${word})</span>`;
+      const sub = `${pl.moves.length ? `<b>First move ${pl.moves.join(', then ')}.</b><br>` : ''}${pl.keep.length ? `Needs ${pl.keep.join(', ')}.<br>` : ''}${c.v.toFixed(1)} &middot; ${posRank(c.p, pl.slot)}<span style="position:absolute;right:9px;bottom:6px;font:800 15px/1 system-ui,sans-serif" title="S = 82-0 calibre ${pl.slot}; then A+, A, B, C, D">(${word})</span>`;
       return bar(bg, '#fff', head, sub); };
     let top_ = '';
-    const restart = team.length === 0 && top && top.v < 20;
+    const restart = team.length === 0 && top && !['S', 'A+', 'A'].includes(tier(top)[1]);
     if (!top) top_ = bar('#546e7a', '#fff', big('NOTHING TO PICK'), 'No player here can join your team in any arrangement.');
-    else if (restart) top_ = bar('#991b1b', '#fff', big('RESTART THE GAME'), `Best player on this first spin is ${esc(top.p.name)} at ${top.v.toFixed(1)}. Starting under 20 leaves no realistic path, so start a new game.`);
+    else if (restart) top_ = bar('#991b1b', '#fff', big('RESTART THE GAME'), `Best here is ${esc(top.p.name)} &rarr; ${placement(top).slot}, ${top.v.toFixed(1)} (${tier(top)[1]}). A first pick below A leaves no realistic path.`);
     else if (better) { const era = better.name === 'Era';
       top_ = bar(era ? '#7c3aed' : '#f59e0b', era ? '#fff' : '#1a1a1a', big(`RE-ROLL ${better.name.toUpperCase()}`),
         `${better.known ? better.cost.replace(/^ \(|\)$/g, '') || 'Free re-roll available' : 'If you still have it'}. 82-0 chance ${pct(top.p82)} &rarr; ${pct(better.p82)}. Otherwise take ${esc(top.p.name)} &rarr; ${placement(top).slot}.`); }
@@ -202,13 +222,13 @@
       const bg = real ? GOLD : g[3];
       // 82-0 marker: struck through once it's gone, ticked while still mathematically open, a percentage once it's real
       const mark = out ? '<s style="opacity:.75">82-0</s>' : real ? `82-0 ${pct(chosen.p82)}` : '82-0 &#10003;';
-      const label = `Projected ${rec(chosen.avg)} &middot; ${g[1]} ${g[2]} &middot; ${mark}`;
+      const label = `Projected ${rec(chosen.avg)} &middot; ${g[1]} &middot; ${mark}`;
       oddsHtml = `<div style="background:${bg};border-radius:6px;padding:5px 9px;margin:0 -3px 6px;font:700 13px/1.3 system-ui,sans-serif">${label}</div>`;
     }
     // always on screen: the top 4 options. Behind (i): picks so far, re-roll lines, squad counts.
     let opts = '';
     for (const c of scored.slice(0, 4)) { const pl = placement(c);
-      opts += `<div style="margin:1px 0">${c === top ? '\u2605 ' : ''}<b>${esc(c.p.name)}</b> &rarr; ${posRank(c.p, pl.slot)}${pl.moves.length ? ' (move first)' : ''} &middot; ${c.v.toFixed(1)} &middot; ${rec(c.avg)}${c.p82 >= 0.01 ? ` &middot; 82-0 ${pct(c.p82)}` : ''}</div>`; }
+      opts += `<div style="margin:1px 0">${c === top ? '\u2605 ' : ''}<b>${esc(c.p.name)}</b> &rarr; ${posRank(c.p, pl.slot)} &middot; ${c.v.toFixed(1)} &middot; ${rec(c.avg)}${c.p82 >= 0.01 ? ` &middot; 82-0 ${pct(c.p82)}` : ''}</div>`; }
     let h = `Picked: ${team.length ? SLOTS.filter(sl => picks[sl]).map(sl => `${sl} ${esc(picks[sl].name)} ${val(picks[sl]).toFixed(1)}`).join(', ') : 'none yet'}`;
     if (!rerollOK) h += `<br><small>Re-roll advice: ${team.length < 3 ? `only after 3 players are picked (${team.length} so far)` : '82-0 is no longer reachable with this team, so a re-roll would be wasted'}.</small>`;
     for (const r of rr) h += `<br>&nbsp; <span style="color:${r.name === 'Era' ? '#c4b5fd' : '#fcd34d'}">${r.name} re-roll</span>: <b>${pct(r.p82)}</b>, ${rec(r.avg)} <small>(${r.n} squads seen)</small>`;
@@ -221,7 +241,7 @@
   function render() {
     if (mode === 'off') { P.style.cssText = 'position:fixed;right:2px;bottom:50%;z-index:99999;width:12px;height:12px;border-radius:50%;background:#0b2545;opacity:.3;cursor:pointer'; P.innerHTML = ''; return; }
     P.style.cssText = CSS + ';cursor:pointer';
-    const ctl = `<div style="float:right;margin:-2px -3px 2px 6px"><span data-r82="info" style="${BTN}${info ? ';background:rgba(255,255,255,.4)' : ''}" title="Details">i</span><span data-r82="off" style="${BTN}" title="Hide everything">&times;</span></div>`;
+    const ctl = `<div style="position:relative;z-index:3;float:right;margin:-2px -3px 2px 6px"><span data-r82="info" style="${BTN}${info ? ';background:rgba(255,255,255,.4)' : ''}" title="Details">i</span><span data-r82="off" style="${BTN}" title="Hide everything">&times;</span></div>`;
     let banner = '', body = '';
     if (result) {
       const d = result.score_display?.detail || {}, roster = result.roster || [];
@@ -248,6 +268,7 @@
           if (/session\/start/.test(url)) { picks = {}; cell = null; result = null; rerolls = { team: false, era: false }; seenStart = false; }
           const act = body?.action;
           if (act?.type) LOG.actions[act.type] = (LOG.actions[act.type] || 0) + 1;
+          if (body && (act || body.lineup)) { LOG.recentActions = [...(LOG.recentActions || []).slice(-39), { at: new Date().toISOString(), action: act || null, lineup: body.lineup || null }]; }
           if (act?.type && act.type !== 'pick_player') LOG.actionSamples = { ...(LOG.actionSamples || {}), [act.type + ':' + (act.scope || act.booster_id || '')]: act };
           if (act?.type === 'respin') { const sc = String(act.scope || act.booster_id || ''); if (/era/i.test(sc)) rerolls.era = true; else if (/team|club/i.test(sc)) rerolls.team = true; }
           // the game sends the current arrangement with each action, so moves made on the court are picked up here
