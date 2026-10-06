@@ -5,14 +5,14 @@
 (() => {
   if (window.r820) return;
   window.r820 = 1;
-  const VERSION = 'v21';
+  const VERSION = 'v22';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
-  // Refitted 6 Oct 2026 from 99 games (scores 69.8-117.9); leave-one-out error 0.52, no sign of curvature: team score = sum of player values + BASE.
+  // Refitted 7 Oct 2026 from 132 games (scores 69.8-117.9); leave-one-out error 0.50, no sign of curvature: team score = sum of player values + BASE.
   // A player with no steals/blocks on record (1960s, early 1970s) gets NO_DEF instead.
-  const MODEL = { ppg: 0.344, rpg: 0.612, apg: 0.624, spg: 1.265, bpg: 1.500, NO_DEF: 2.977, BASE: -1.274, GAMES: 99 };
-  // Score to wins: a power curve that matches all 99 games exactly (a straight line missed the 102.7 game).
+  const MODEL = { ppg: 0.342, rpg: 0.621, apg: 0.624, spg: 1.290, bpg: 1.455, NO_DEF: 3.039, BASE: -1.375, GAMES: 132 };
+  // Score to wins: a power curve that matches all 132 games exactly (a straight line missed the 102.7 game).
   // 82 wins needs a score between 119.27 and 119.36 (narrowed by the 112.0 game); the upper end is used.
   const winsFor = s => Math.max(0, Math.min(82, Math.round(82 * Math.pow(Math.max(0, s) / 119.9, 1.155))));
   const SCORE_82 = 119.36;
