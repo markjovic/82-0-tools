@@ -5,7 +5,7 @@
 (() => {
   if (window.r820) return;
   window.r820 = 1;
-  const VERSION = 'v13';
+  const VERSION = 'v19';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -40,6 +40,25 @@
     return PAR;
   };
   const rnd = a => a[Math.floor(Math.random() * a.length)];
+  // "82-0 calibre" for a position = at least the 25th-best value at that position across the known squads, and never
+  // below 20 (82-0 needs an average of about 24 a player). Recomputed as the squad list grows.
+  let ELITE = null, eliteN = 0;
+  const elite = () => { const qs = squads(); if (ELITE && eliteN === qs.length) return ELITE; ELITE = {}; eliteN = qs.length;
+    for (const sl of SLOTS) { const v = [...new Map(qs.flatMap(q => q.squad).filter(p => fits(p, sl)).map(p => [p.name, val(p)])).values()].sort((a, b) => b - a);
+      ELITE[sl] = Math.max(20, v[24] ?? 20); }
+    return ELITE; };
+  // Rank of a player's value among every player in the known squads who can play that position (each club/era stint
+  // counted once). Exact rank inside the top 25, a band beyond that.
+  let RANKS = null, ranksN = 0;
+  const posRank = (p, sl) => { const qs = squads();
+    if (!RANKS || ranksN !== qs.length) { RANKS = {}; ranksN = qs.length;
+      for (const x of SLOTS) RANKS[x] = [...new Map(qs.flatMap(q => q.squad).filter(q => fits(q, x)).map(q => [String(q.player_id) + '|' + q.team_id + '|' + q.era, val(q)])).values()].sort((a, b) => b - a); }
+    const v = val(p), r = RANKS[sl].filter(x => x > v + 1e-9).length + 1;
+    return `#${r} ${sl}`; };
+  // The game's own grades, read off 123 logged results: D up to 49 wins, C 50-55, B 56-61, A 62-71, A+ 72 and up.
+  const GRADES = [[72, 'A+', 'Historic', '#047857'], [62, 'A', 'Dynasty', '#16a34a'], [56, 'B', 'Contender', '#0e7490'], [50, 'C', 'Playoff', '#b45309'], [0, 'D', 'Lottery', '#b91c1c']];
+  const gradeOf = w => GRADES.find(g => w >= g[0]);
+  const GOLD = '#a16207';   // reserved for a real 82-0 chance (1% or better)
   // Players can be moved between positions after they're picked, so a team is a SET of players that only needs
   // some valid arrangement. assign() finds one, keeping each player in his current position where it can.
   const assign = (players, cur) => {
@@ -97,10 +116,16 @@
   P.style.cssText = CSS; document.body.append(P);
   let mode = 'full';
   const BTN = 'display:inline-block;min-width:22px;text-align:center;padding:1px 6px;margin-left:4px;border-radius:5px;background:rgba(255,255,255,.18);color:#fff;font:700 13px/1.4 system-ui,sans-serif;cursor:pointer';
+  // Tap anywhere on the panel to minimise / restore it. Buttons: (i) details, x hide everything, export log.
+  let info = false;
   P.addEventListener('click', e => {
     const m = e.target.closest && e.target.closest('[data-r82]');
-    if (m) { const a = m.getAttribute('data-r82'); if (a === 'export') exportLog(); else mode = a; e.stopPropagation(); render(); }
-    else if (mode === 'off') { mode = 'full'; render(); }
+    const a = m ? m.getAttribute('data-r82') : null;
+    if (a === 'export') exportLog();
+    else if (a === 'info') { info = !info; if (mode !== 'full') mode = 'full'; }
+    else if (a === 'off') mode = 'off';
+    else mode = mode === 'full' ? 'min' : 'full';
+    e.stopPropagation(); render();
   });
   const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
   const pct = x => Math.round(x * 100) + '%';
@@ -119,11 +144,14 @@
     if (sig === cache.sig) return cache;
     // candidates: every player on this spin who can join the team in some arrangement, best values first
     const cands = (cell.squad || []).filter(p => !used.has(String(p.player_id)) && feasible([...team, p])).map(p => ({ p, v: val(p) })).sort((a, b) => b.v - a.v).slice(0, 6);
-    const scored = cands.map(c => ({ ...c, ...simulate(team, c, SIMS) })).sort((a, b) => b.p82 - a.p82 || b.avg - a.avg);
+    // Rank by 82-0 chance, then projected score. Simulated scores carry about +/-0.3 of noise, so when two picks are
+    // within 0.5 of each other the higher-value player now wins: a sure thing beats an equal-looking gamble.
+    const scored = cands.map(c => ({ ...c, ...simulate(team, c, SIMS) })).sort((a, b) =>
+      (Math.abs(b.p82 - a.p82) >= 0.01 ? b.p82 - a.p82 : 0) || (Math.abs(b.avg - a.avg) >= 0.5 ? b.avg - a.avg : b.v - a.v));
     const top = scored[0] || null;
     // where the pick goes, and which already-picked players have to move to make room
     const placement = c => { const a = assign([...team, c.p], cur) || {}; const slot = SLOTS.find(sl => a[sl] === c.p);
-      const moves = SLOTS.filter(sl => a[sl] && a[sl] !== c.p && cur.get(String(a[sl].player_id)) !== sl).map(sl => `move ${esc(a[sl].name)} ${cur.get(String(a[sl].player_id))} to ${sl}`);
+      const moves = SLOTS.filter(sl => a[sl] && a[sl] !== c.p && cur.get(String(a[sl].player_id)) !== sl).map(sl => `${esc(a[sl].name)} ${cur.get(String(a[sl].player_id))} &rarr; ${sl}`);
       return { slot, moves }; };
     const qs = squads();
     const clubPool = qs.filter(q => q.era === cell.era && q.team?.team_id !== cell.team?.team_id);
@@ -142,52 +170,71 @@
     const out = reach !== null && reach < SCORE_82;
     const better = rr.filter(r => top && r.p82 - top.p82 >= 0.03).sort((a, b) => (b.p82 - a.p82) || (b.avg - a.avg))[0];
 
-    // TOP BAR = what to do. Blue = take a player; orange/purple = use that re-roll (the game's own button colours).
+    // TOP BAR = what to do. Its colour rates the pick for its position: green = 82-0 calibre, blue = solid, amber = weak.
+    // Re-roll advice uses the game's own button colours (orange team, purple era); RESTART is red.
+    const bar = (bg, fg, head, sub) => `<div style="position:relative;background:${bg};color:${fg};border-radius:6px;padding:8px 34px 8px 10px;margin:-2px -3px 6px">${head}${sub ? `<div style="font:600 12px/1.35 system-ui,sans-serif;margin-top:3px">${sub}</div>` : ''}</div>`;
+    const big = t => `<div style="font:800 19px/1.15 system-ui,sans-serif">${t}</div>`;
+    const tier = c => { const sl = placement(c).slot, e = elite()[sl] ?? 20;
+      // tier grade, pinned bottom-right of the top bar, on the game's own scale (D, C, B, A, A+) with S on top:
+      // S = 82-0 calibre for that position (at least the 25th-best value, and 20+), then A+ within 1, A within 2,
+      // B within 3, C within 4.5, D beyond. Colours match the outlook bar's grade colours; gold = 82-0.
+      const d = e - c.v;
+      return d <= 0 ? [GOLD, 'S'] : d <= 1 ? ['#047857', 'A+'] : d <= 2 ? ['#16a34a', 'A'] : d <= 3 ? ['#0e7490', 'B'] : d <= 4.5 ? ['#b45309', 'C'] : ['#b91c1c', 'D']; };
+    const pickBar = c => { const pl = placement(c), [bg, word] = tier(c);
+      const head = `<div style="font:800 11px/1.2 system-ui,sans-serif;letter-spacing:.06em;opacity:.85">${pl.moves.length ? 'MOVE FIRST, THEN TAKE' : 'TAKE'}</div>${big(`${esc(c.p.name)} <span style="font-weight:700;opacity:.9">&rarr; ${pl.slot}</span>`)}`;
+      const sub = `${pl.moves.length ? `<b>First move ${pl.moves.join(', ')}.</b><br>` : ''}${c.v.toFixed(1)} &middot; ${posRank(c.p, pl.slot)}<span style="position:absolute;right:9px;bottom:6px;font:800 15px/1 system-ui,sans-serif" title="S = 82-0 calibre ${pl.slot}; then A+, A, B, C, D">(${word})</span>`;
+      return bar(bg, '#fff', head, sub); };
     let top_ = '';
-    const bar = (bg, fg, head, sub) => `<div style="background:${bg};color:${fg};border-radius:6px;padding:8px 10px;margin:-2px -3px 6px">${head}${sub ? `<div style="font:600 12px/1.35 system-ui,sans-serif;margin-top:3px">${sub}</div>` : ''}</div>`;
-    const pickHead = c => { const pl = placement(c);
-      return { head: `<div style="font:800 11px/1.2 system-ui,sans-serif;letter-spacing:.06em;opacity:.85">TAKE</div><div style="font:800 19px/1.15 system-ui,sans-serif">${esc(c.p.name)} <span style="font-weight:700;opacity:.9">&rarr; ${pl.slot}</span></div>`,
-        sub: `plays ${(c.p.positions || []).join(' / ')} &middot; value ${c.v.toFixed(1)}${pl.moves.length ? `<br><b>Then ${pl.moves.join('; ')}.</b>` : ''}` }; };
-    if (!top) top_ = bar('#546e7a', '#fff', '<div style="font:800 17px/1.2 system-ui,sans-serif">NOTHING TO PICK</div>', 'No player here can join your team in any arrangement.');
-    else if (better) { const era = better.name === 'Era', ph = pickHead(top);
-      top_ = bar(era ? '#7c3aed' : '#f59e0b', era ? '#fff' : '#1a1a1a', `<div style="font:800 19px/1.15 system-ui,sans-serif">RE-ROLL ${better.name.toUpperCase()}</div>`,
-        `${better.known ? better.cost.replace(/^ \(|\)$/g, '') || 'Free re-roll available' : 'If you still have it'}. Otherwise take ${esc(top.p.name)} &rarr; ${placement(top).slot}.`); }
-    else { const ph = pickHead(top); top_ = bar('#1d4ed8', '#fff', ph.head, ph.sub); }
+    const restart = team.length === 0 && top && top.v < 20;
+    if (!top) top_ = bar('#546e7a', '#fff', big('NOTHING TO PICK'), 'No player here can join your team in any arrangement.');
+    else if (restart) top_ = bar('#991b1b', '#fff', big('RESTART THE GAME'), `Best player on this first spin is ${esc(top.p.name)} at ${top.v.toFixed(1)}. Starting under 20 leaves no realistic path, so start a new game.`);
+    else if (better) { const era = better.name === 'Era';
+      top_ = bar(era ? '#7c3aed' : '#f59e0b', era ? '#fff' : '#1a1a1a', big(`RE-ROLL ${better.name.toUpperCase()}`),
+        `${better.known ? better.cost.replace(/^ \(|\)$/g, '') || 'Free re-roll available' : 'If you still have it'}. 82-0 chance ${pct(top.p82)} &rarr; ${pct(better.p82)}. Otherwise take ${esc(top.p.name)} &rarr; ${placement(top).slot}.`); }
+    else top_ = pickBar(top);
 
-    // ODDS, below the pick. Colour shows the 82-0 outlook: green = real chance (10%+), amber = long shot, red = none.
+    // OUTLOOK bar, below. Gold = a real 82-0 chance (1%+). Otherwise coloured by the projected record's grade.
     const chosen = better || top;
     let oddsHtml = '';
-    if (chosen) {
-      const p82 = chosen.p82, oc = out || p82 < 0.005 ? '#c62828' : p82 < 0.10 ? '#b45309' : '#15803d';
-      const label = out ? `82-0 out of reach: best possible ${rec(reach)}` : p82 < 0.005 ? '82-0 chance under 1%' : `82-0 chance ${pct(p82)}`;
-      oddsHtml = `<div style="background:${oc};border-radius:6px;padding:5px 9px;margin:0 -3px 6px;font:700 13px/1.3 system-ui,sans-serif">${label} &middot; projected ${rec(chosen.avg)}</div>`;
+    if (chosen && !restart) {
+      const w = winsFor(chosen.avg), g = gradeOf(w);
+      const real = !out && chosen.p82 >= 0.01;
+      const bg = real ? GOLD : g[3];
+      // 82-0 marker: struck through once it's gone, ticked while still mathematically open, a percentage once it's real
+      const mark = out ? '<s style="opacity:.75">82-0</s>' : real ? `82-0 ${pct(chosen.p82)}` : '82-0 &#10003;';
+      const label = `Projected ${rec(chosen.avg)} &middot; ${g[1]} ${g[2]} &middot; ${mark}`;
+      oddsHtml = `<div style="background:${bg};border-radius:6px;padding:5px 9px;margin:0 -3px 6px;font:700 13px/1.3 system-ui,sans-serif">${label}</div>`;
     }
+    // always on screen: the top 4 options. Behind (i): picks so far, re-roll lines, squad counts.
+    let opts = '';
+    for (const c of scored.slice(0, 4)) { const pl = placement(c);
+      opts += `<div style="margin:1px 0">${c === top ? '\u2605 ' : ''}<b>${esc(c.p.name)}</b> &rarr; ${posRank(c.p, pl.slot)}${pl.moves.length ? ' (move first)' : ''} &middot; ${c.v.toFixed(1)} &middot; ${rec(c.avg)}${c.p82 >= 0.01 ? ` &middot; 82-0 ${pct(c.p82)}` : ''}</div>`; }
     let h = `Picked: ${team.length ? SLOTS.filter(sl => picks[sl]).map(sl => `${sl} ${esc(picks[sl].name)} ${val(picks[sl]).toFixed(1)}`).join(', ') : 'none yet'}`;
-    h += `<br>Choices (82-0 chance, projected record):`;
-    for (const c of scored.slice(0, 5)) { const pl = placement(c); h += `<br>&nbsp; ${c === top ? '\u2605\u2605 ' : ''}${esc(c.p.name)} &rarr; ${pl.slot}${pl.moves.length ? ' (with a move)' : ''} (${c.v.toFixed(1)}): <b>${pct(c.p82)}</b>, ${rec(c.avg)}`; }
     if (!rerollOK) h += `<br><small>Re-roll advice: ${team.length < 3 ? `only after 3 players are picked (${team.length} so far)` : '82-0 is no longer reachable with this team, so a re-roll would be wasted'}.</small>`;
     for (const r of rr) h += `<br>&nbsp; <span style="color:${r.name === 'Era' ? '#c4b5fd' : '#fcd34d'}">${r.name} re-roll</span>: <b>${pct(r.p82)}</b>, ${rec(r.avg)} <small>(${r.n} squads seen)</small>`;
     const none = ['team', 'era'].filter(k => avail(k) === false).map(k => k === 'team' ? 'Team' : 'Era');
     if (none.length) h += `<br><small>${none.length === 2 ? 'No re-rolls left' : none[0] + ' re-roll: none left'}${cell.boosters ? ' (per the game)' : ''}.</small>`;
-    cache = { sig, banner: top_ + oddsHtml, h, rec: top };
+    cache = { sig, banner: top_ + oddsHtml, opts: restart ? '' : opts, h, rec: top };
     return cache;
   }
 
   function render() {
     if (mode === 'off') { P.style.cssText = 'position:fixed;right:2px;bottom:50%;z-index:99999;width:12px;height:12px;border-radius:50%;background:#0b2545;opacity:.3;cursor:pointer'; P.innerHTML = ''; return; }
-    P.style.cssText = CSS;
-    const ctl = `<div style="float:right;margin:-2px -3px 2px 6px">${mode === 'full' ? `<span data-r82="min" style="${BTN}">&minus;</span>` : `<span data-r82="full" style="${BTN}">+</span>`}<span data-r82="off" style="${BTN}">&times;</span></div>`;
+    P.style.cssText = CSS + ';cursor:pointer';
+    const ctl = `<div style="float:right;margin:-2px -3px 2px 6px"><span data-r82="info" style="${BTN}${info ? ';background:rgba(255,255,255,.4)' : ''}" title="Details">i</span><span data-r82="off" style="${BTN}" title="Hide everything">&times;</span></div>`;
     let banner = '', body = '';
     if (result) {
       const d = result.score_display?.detail || {}, roster = result.roster || [];
       const pred = roster.reduce((a, r) => a + val(r.player), 0) + MODEL.BASE;
       banner = BAN('#0b3d6b', '#fff', `RESULT ${esc(result.score_display?.name ?? '')}`, `Game score ${esc(result.score)} (model said ${pred.toFixed(1)}). ${esc(d.grade ?? '')} ${esc(d.grade_label ?? '')}`);
       body = roster.map(r => `${esc(r.slot)} ${esc(r.player?.name)} ${val(r.player).toFixed(1)}`).join('<br>');
-    } else if (cell) { const a = advise(); banner = a.banner; body = a.h; }
+    } else if (cell) { const a = advise(); banner = a.banner + (a.opts || ''); body = a.h; }
     else body = 'Waiting for the next spin or pick. Run this before your first spin so it can follow the whole game.';
     const all = Object.keys({ ...SITE, ...LOG.squads }).length, onlyLocal = Object.keys(LOG.squads).filter(k => !SITE[k]).length;
     const foot = `<br><small>${all} squads in use (${Object.keys(SITE).length} shared${onlyLocal ? `, ${onlyLocal} new on this device` : ''})${siteNote ? ' &middot; ' + esc(siteNote) : ''}<br>${LOG.games.length} games, ${Object.keys(LOG.squads).length} squads logged &middot; <span data-r82="export" style="text-decoration:underline;cursor:pointer">export log</span>${note ? ' &middot; ' + esc(note) : ''}<br>82-0 overlay ${VERSION} &middot; model from ${MODEL.GAMES} games</small>`;
-    P.innerHTML = ctl + banner + (mode === 'full' ? body + foot : '');
+    const warn = siteNote && /NOT LOADED/.test(siteNote) ? `<small style="color:#ffb74d">${esc(siteNote)}</small>` : '';
+    if (mode === 'min') P.innerHTML = banner || '<b>82-0 overlay</b>';
+    else P.innerHTML = ctl + banner + (info ? body + foot : (warn || (cell || result ? '' : body)) + `<div style="font-size:10px;opacity:.55;margin-top:2px">tap to minimise &middot; i for details &middot; ${VERSION}</div>`);
   }
 
   const _fetch = window.fetch;
