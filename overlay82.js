@@ -5,7 +5,7 @@
 (() => {
   if (window.r820) return;
   window.r820 = 1;
-  const VERSION = 'v22';
+  const VERSION = 'v24';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -115,18 +115,44 @@
   // re-rolls used this game; seenStart = the overlay saw this game from its first spin, so 'unused' is known
   let rerolls = { team: false, era: false }, seenStart = false;
   const P = document.createElement('div');
-  const CSS = 'position:fixed;right:6px;bottom:88px;z-index:99999;background:#0b2545;color:#fff;border-radius:8px;padding:7px 9px;font:12px/1.4 system-ui,sans-serif;max-width:320px;max-height:62vh;overflow:auto;box-shadow:0 4px 16px rgba(0,0,0,.35)';
-  P.style.cssText = CSS; document.body.append(P);
+  // The panel can be dragged anywhere; where you leave it is remembered in this browser.
+  const POS_KEY = 'r82pos';
+  let pos = null; try { pos = JSON.parse(localStorage.getItem(POS_KEY)); } catch (e) {}
+  const BASE_CSS = 'position:fixed;z-index:99999;background:#0b2545;color:#fff;border-radius:8px;padding:7px 9px;font:12px/1.4 system-ui,sans-serif;max-width:320px;max-height:62vh;overflow:auto;box-shadow:0 4px 16px rgba(0,0,0,.35);touch-action:none;user-select:none';
+  const where = () => pos ? `left:${Math.max(0, Math.min(pos.x, innerWidth - 60))}px;top:${Math.max(0, Math.min(pos.y, innerHeight - 40))}px` : 'right:6px;bottom:88px';
+  const CSS_ = () => BASE_CSS + ';' + where();
+  P.style.cssText = CSS_(); document.body.append(P);
   let mode = 'full';
   const BTN = 'display:inline-block;min-width:22px;text-align:center;padding:1px 6px;margin-left:4px;border-radius:5px;background:rgba(255,255,255,.18);color:#fff;font:700 13px/1.4 system-ui,sans-serif;cursor:pointer';
   // Tap anywhere on the panel to minimise / restore it. Buttons: (i) details, x hide everything, export log.
   let info = false;
+  // drag: press and move more than 8px; a press that doesn't move is a tap
+  let drag = null, dragged = false;
+  P.addEventListener('pointerdown', e => {
+    if (e.target.closest && e.target.closest('[data-r82]')) return;
+    const r = P.getBoundingClientRect(); drag = { sx: e.clientX, sy: e.clientY, ox: r.left, oy: r.top, moved: false };
+    P.setPointerCapture?.(e.pointerId);
+  });
+  P.addEventListener('pointermove', e => {
+    if (!drag) return; const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+    if (!drag.moved && Math.hypot(dx, dy) < 8) return;
+    drag.moved = true; pos = { x: drag.ox + dx, y: drag.oy + dy };
+    P.style.left = pos.x + 'px'; P.style.top = pos.y + 'px'; P.style.right = 'auto'; P.style.bottom = 'auto';
+  });
+  let tapped = false;
+  P.addEventListener('pointerup', () => {
+    if (drag?.moved) { dragged = true; try { localStorage.setItem(POS_KEY, JSON.stringify(pos)); } catch (e) {} }
+    else if (drag) { tapped = true; mode = mode === 'full' ? 'min' : 'full'; render(); setTimeout(() => { tapped = false; }, 400); }
+    drag = null;
+  });
   P.addEventListener('click', e => {
+    if (dragged) { dragged = false; e.stopPropagation(); return; }   // the end of a drag isn't a tap
     const m = e.target.closest && e.target.closest('[data-r82]');
     const a = m ? m.getAttribute('data-r82') : null;
     if (a === 'export') exportLog();
     else if (a === 'info') { info = !info; if (mode !== 'full') mode = 'full'; }
     else if (a === 'off') mode = 'off';
+    else if (tapped) { tapped = false; return; }               // already handled on pointerup
     else mode = mode === 'full' ? 'min' : 'full';
     e.stopPropagation(); render();
   });
@@ -239,8 +265,9 @@
   }
 
   function render() {
-    if (mode === 'off') { P.style.cssText = 'position:fixed;right:2px;bottom:50%;z-index:99999;width:12px;height:12px;border-radius:50%;background:#0b2545;opacity:.3;cursor:pointer'; P.innerHTML = ''; return; }
-    P.style.cssText = CSS + ';cursor:pointer';
+    // hidden: a small round button where the panel was, visible on 82-0's dark page; tap it to bring the panel back
+    if (mode === 'off') { P.style.cssText = `position:fixed;z-index:99999;${where()};width:30px;height:30px;border-radius:50%;background:#f59e0b;border:2px solid #fff;opacity:.75;cursor:pointer;touch-action:none;box-shadow:0 2px 8px rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;font:800 11px/1 system-ui,sans-serif;color:#1a1a1a`; P.innerHTML = '82'; return; }
+    P.style.cssText = CSS_() + ';cursor:pointer';
     const ctl = `<div style="position:relative;z-index:3;float:right;margin:-2px -3px 2px 6px"><span data-r82="info" style="${BTN}${info ? ';background:rgba(255,255,255,.4)' : ''}" title="Details">i</span><span data-r82="off" style="${BTN}" title="Hide everything">&times;</span></div>`;
     let banner = '', body = '';
     if (result) {
@@ -254,7 +281,7 @@
     const foot = `<br><small>${all} squads in use (${Object.keys(SITE).length} shared${onlyLocal ? `, ${onlyLocal} new on this device` : ''})${siteNote ? ' &middot; ' + esc(siteNote) : ''}<br>${LOG.games.length} games, ${Object.keys(LOG.squads).length} squads logged &middot; <span data-r82="export" style="text-decoration:underline;cursor:pointer">export log</span>${note ? ' &middot; ' + esc(note) : ''}<br>82-0 overlay ${VERSION} &middot; model from ${MODEL.GAMES} games</small>`;
     const warn = siteNote && /NOT LOADED/.test(siteNote) ? `<small style="color:#ffb74d">${esc(siteNote)}</small>` : '';
     if (mode === 'min') P.innerHTML = banner || '<b>82-0 overlay</b>';
-    else P.innerHTML = ctl + banner + (info ? body + foot : (warn || (cell || result ? '' : body)) + `<div style="font-size:10px;opacity:.55;margin-top:2px">tap to minimise &middot; i for details &middot; ${VERSION}</div>`);
+    else P.innerHTML = ctl + banner + (info ? body + foot : (warn || (cell || result ? '' : body)) + `<div style="font-size:10px;opacity:.55;margin-top:2px">tap to minimise &middot; drag to move &middot; i for details &middot; ${VERSION}</div>`);
   }
 
   const _fetch = window.fetch;
