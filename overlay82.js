@@ -5,7 +5,7 @@
 (() => {
   if (window.r820) return;
   window.r820 = 1;
-  const VERSION = 'v24';
+  const VERSION = 'v25';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -56,6 +56,7 @@
       for (const x of SLOTS) RANKS[x] = [...new Map(qs.flatMap(q => q.squad).filter(q => fits(q, x)).map(q => [String(q.player_id) + '|' + q.team_id + '|' + q.era, val(q)])).values()].sort((a, b) => b - a); }
     const v = val(p), r = RANKS[sl].filter(x => x > v + 1e-9).length + 1;
     return `#${r} ${sl}`; };
+  const rankNum = (p, sl) => { posRank(p, sl); const v = val(p); return RANKS[sl].filter(x => x > v + 1e-9).length + 1; };
   // The game's own grades, read off 123 logged results: D up to 49 wins, C 50-55, B 56-61, A 62-71, A+ 72 and up.
   const GRADES = [[72, 'A+', 'Historic', '#047857'], [62, 'A', 'Dynasty', '#16a34a'], [56, 'B', 'Contender', '#0e7490'], [50, 'C', 'Playoff', '#b45309'], [0, 'D', 'Lottery', '#b91c1c']];
   const gradeOf = w => GRADES.find(g => w >= g[0]);
@@ -220,20 +221,18 @@
     // Re-roll advice uses the game's own button colours (orange team, purple era); RESTART is red.
     const bar = (bg, fg, head, sub) => `<div style="position:relative;background:${bg};color:${fg};border-radius:6px;padding:8px 34px 8px 10px;margin:-2px -3px 6px">${head}${sub ? `<div style="font:600 12px/1.35 system-ui,sans-serif;margin-top:3px">${sub}</div>` : ''}</div>`;
     const big = t => `<div style="font:800 19px/1.15 system-ui,sans-serif">${t}</div>`;
-    const tier = c => { const sl = placement(c).slot, e = elite()[sl] ?? 20;
-      // tier grade, pinned bottom-right of the top bar, on the game's own scale (D, C, B, A, A+) with S on top:
-      // S = 82-0 calibre for that position (at least the 25th-best value, and 20+), then A+ within 1, A within 2,
-      // B within 3, C within 4.5, D beyond. Colours match the outlook bar's grade colours; gold = 82-0.
-      const d = e - c.v;
-      return d <= 0 ? [GOLD, 'S'] : d <= 1 ? ['#047857', 'A+'] : d <= 2 ? ['#16a34a', 'A'] : d <= 3 ? ['#0e7490', 'B'] : d <= 4.5 ? ['#b45309', 'C'] : ['#b91c1c', 'D']; };
+    // Grade = rank at the position the pick goes into, among every club/era stint in the known squads:
+    // S top 10, A+ 11-25, A 26-50, B 51-100, C 101-200, D beyond. Same scale as the rank shown beside it.
+    const tier = c => { const r = rankNum(c.p, placement(c).slot);
+      return r <= 10 ? [GOLD, 'S'] : r <= 25 ? ['#047857', 'A+'] : r <= 50 ? ['#16a34a', 'A'] : r <= 100 ? ['#0e7490', 'B'] : r <= 200 ? ['#b45309', 'C'] : ['#b91c1c', 'D']; };
     const pickBar = c => { const pl = placement(c), [bg, word] = tier(c);
       const head = `<div style="font:800 11px/1.2 system-ui,sans-serif;letter-spacing:.06em;opacity:.85">${pl.moves.length ? 'MOVE FIRST, THEN TAKE' : 'TAKE'}</div>${big(`${esc(c.p.name)} <span style="font-weight:700;opacity:.9">&rarr; ${pl.slot}</span>`)}`;
-      const sub = `${pl.moves.length ? `<b>First move ${pl.moves.join(', then ')}.</b><br>` : ''}${pl.keep.length ? `Needs ${pl.keep.join(', ')}.<br>` : ''}${c.v.toFixed(1)} &middot; ${posRank(c.p, pl.slot)}<span style="position:absolute;right:9px;bottom:6px;font:800 15px/1 system-ui,sans-serif" title="S = 82-0 calibre ${pl.slot}; then A+, A, B, C, D">(${word})</span>`;
+      const sub = `${pl.moves.length ? `<b>First move ${pl.moves.join(', then ')}.</b><br>` : ''}${pl.keep.length ? `Needs ${pl.keep.join(', ')}.<br>` : ''}${c.v.toFixed(1)} &middot; ${posRank(c.p, pl.slot)}<span style="position:absolute;right:9px;bottom:6px;font:800 15px/1 system-ui,sans-serif" title="S top 10 ${pl.slot}, A+ top 25, A top 50, B top 100, C top 200, D beyond">(${word})</span>`;
       return bar(bg, '#fff', head, sub); };
     let top_ = '';
     const restart = team.length === 0 && top && !['S', 'A+', 'A'].includes(tier(top)[1]);
     if (!top) top_ = bar('#546e7a', '#fff', big('NOTHING TO PICK'), 'No player here can join your team in any arrangement.');
-    else if (restart) top_ = bar('#991b1b', '#fff', big('RESTART THE GAME'), `Best here is ${esc(top.p.name)} &rarr; ${placement(top).slot}, ${top.v.toFixed(1)} (${tier(top)[1]}). A first pick below A leaves no realistic path.`);
+    else if (restart) top_ = bar('#991b1b', '#fff', big('RESTART THE GAME'), `Best here is ${esc(top.p.name)} &rarr; ${placement(top).slot}, ${top.v.toFixed(1)} (${tier(top)[1]}). A first pick outside the top 50 at his position leaves no realistic path.`);
     else if (better) { const era = better.name === 'Era';
       top_ = bar(era ? '#7c3aed' : '#f59e0b', era ? '#fff' : '#1a1a1a', big(`RE-ROLL ${better.name.toUpperCase()}`),
         `${better.known ? better.cost.replace(/^ \(|\)$/g, '') || 'Free re-roll available' : 'If you still have it'}. 82-0 chance ${pct(top.p82)} &rarr; ${pct(better.p82)}. Otherwise take ${esc(top.p.name)} &rarr; ${placement(top).slot}.`); }
