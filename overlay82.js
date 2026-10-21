@@ -5,13 +5,14 @@
 (() => {
   if (window.r820) return;
   window.r820 = 1;
-  const VERSION = 'v26';
+  const VERSION = 'v28';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
-  // Refitted 7 Oct 2026 from 132 games (scores 69.8-117.9); leave-one-out error 0.50, no sign of curvature: team score = sum of player values + BASE.
+  // Refitted 21 Oct 2026 from 139 games. Team blocks have a bend: below BPG_BEND team blocks, each block is worth
+  // BPG_EXTRA more (low-block teams are penalised harder). Leave-one-out error 0.37 (was 0.49 without the bend).: team score = sum of player values + BASE.
   // A player with no steals/blocks on record (1960s, early 1970s) gets NO_DEF instead.
-  const MODEL = { ppg: 0.342, rpg: 0.621, apg: 0.624, spg: 1.290, bpg: 1.455, NO_DEF: 3.039, BASE: -1.375, GAMES: 132 };
+  const MODEL = { ppg: 0.3360, rpg: 0.6157, apg: 0.6155, spg: 1.2727, bpg: 1.3697, NO_DEF: 3.3117, BASE: -3.3875, BPG_BEND: 2.10, BPG_EXTRA: 1.6617, GAMES: 139 };
   // Score to wins: a power curve that matches all 132 games exactly (a straight line missed the 102.7 game).
   // 82 wins needs a score between 119.27 and 119.36 (narrowed by the 112.0 game); the upper end is used.
   const winsFor = s => Math.max(0, Math.min(82, Math.round(82 * Math.pow(Math.max(0, s) / 119.9, 1.155))));
@@ -31,6 +32,10 @@
 
   // ---------- model ----------
   const val = p => { const s = p?.stats || {}; return STATS.reduce((a, k) => a + MODEL[k] * (+s[k] || 0), 0) + (s.spg == null && s.bpg == null ? MODEL.NO_DEF : 0); };
+  const bpgOf = p => +(p?.stats?.bpg) || 0;
+  // team score: the five player values, the team adjustment, and the blocks bend
+  const blockBonus = players => MODEL.BPG_EXTRA * Math.min(players.reduce((a, p) => a + bpgOf(p), 0), MODEL.BPG_BEND);
+  const teamScore = players => MODEL.BASE + players.reduce((a, p) => a + val(p), 0) + blockBonus(players);
   const fits = (p, s) => (p.positions || []).includes(s);
   const squads = () => Object.values({ ...SITE, ...LOG.squads }).filter(q => q.squad?.length);
   const findPlayer = e => { const q = LOG.squads[`${e.team_id}|${e.era}`] || SITE[`${e.team_id}|${e.era}`]; return q?.squad?.find(p => String(p.player_id) === String(e.player_id)) || null; };
@@ -70,7 +75,7 @@
     const res = {};
     const bt = i => { if (i === order.length) return true; const p = order[i], pref = cur?.get(String(p.player_id));
       let rest = (p.positions || []).filter(x => x !== pref && SLOTS.includes(x));
-      if (!pref && slotOrder) rest = rest.sort(slotOrder);
+      if (!pref && slotOrder) rest = rest.sort((x, y) => slotOrder(p, x, y));
       const opts = [...(pref ? [pref] : []), ...rest];
       for (const sl of opts) if (!res[sl] && fits(p, sl)) { res[sl] = p; if (bt(i + 1)) return true; delete res[sl]; }
       return false; };
@@ -79,7 +84,9 @@
   const feasible = players => players.length <= 5 && assign(players) !== null;
   // best addition from a squad: the highest-value player who still leaves a valid arrangement
   const bestAdd = (squad, team, used) => { let b = null;
-    for (const p of squad) { if (used.has(String(p.player_id))) continue; const v = val(p); if (b && v <= b.v) continue;
+    const B = team.reduce((a, p) => a + bpgOf(p), 0);
+    for (const p of squad) { if (used.has(String(p.player_id))) continue;
+      const v = val(p) + MODEL.BPG_EXTRA * (Math.min(B + bpgOf(p), MODEL.BPG_BEND) - Math.min(B, MODEL.BPG_BEND)); if (b && v <= b.v) continue;
       if (feasible([...team, p])) b = { p, v }; }
     return b; };
   // first: {p} = take that player now; {pool: [...squads]} = re-roll into one of those squads
@@ -95,7 +102,7 @@
       let guard = 0;
       while (ok && t.length < 5 && guard++ < 60) add(rnd(qs).squad);
       if (t.length < 5) continue;
-      const score = sum + MODEL.BASE; tot += score; if (score >= SCORE_82) hit++;
+      const score = teamScore(t); tot += score; if (score >= SCORE_82) hit++;
     }
     return { p82: hit / sims, avg: tot / Math.max(1, sims) };
   }
@@ -105,12 +112,12 @@
     const pool = squads().flatMap(q => q.squad).filter(p => !used.has(String(p.player_id))).map(p => [val(p), p]).sort((a, b) => b[0] - a[0]).slice(0, 80);
     const need = 5 - team.length; let best = -Infinity;
     const rec = (i, t, sum, k) => {
-      if (k === need) { best = Math.max(best, sum); return; }
-      for (let j = i; j < pool.length; j++) { const [v, p] = pool[j]; if (sum + v * (need - k) <= best) break;
+      if (k === need) { best = Math.max(best, teamScore(t)); return; }
+      for (let j = i; j < pool.length; j++) { const [v, p] = pool[j]; if (MODEL.BASE + sum + v * (need - k) + MODEL.BPG_EXTRA * MODEL.BPG_BEND <= best) break;
         if (t.some(x => String(x.player_id) === String(p.player_id))) continue;
         const nt = [...t, p]; if (!feasible(nt)) continue; rec(j + 1, nt, sum + v, k + 1); } };
     rec(0, team, team.reduce((a, p) => a + val(p), 0), 0);
-    return best === -Infinity ? null : best + MODEL.BASE;
+    return best === -Infinity ? null : best;
   }
 
   // ---------- live state from the game's own traffic ----------
@@ -128,7 +135,7 @@
   let mode = 'full';
   const BTN = 'display:inline-block;min-width:22px;text-align:center;padding:1px 6px;margin-left:4px;border-radius:5px;background:rgba(255,255,255,.18);color:#fff;font:700 13px/1.4 system-ui,sans-serif;cursor:pointer';
   // Tap anywhere on the panel to minimise / restore it. Buttons: (i) details, x hide everything, export log.
-  let info = false;
+  let info = false, how = false;
   // drag: press and move more than 8px; a press that doesn't move is a tap
   let drag = null, dragged = false;
   P.addEventListener('pointerdown', e => {
@@ -153,7 +160,8 @@
     const m = e.target.closest && e.target.closest('[data-r82]');
     const a = m ? m.getAttribute('data-r82') : null;
     if (a === 'export') exportLog();
-    else if (a === 'info') { info = !info; if (mode !== 'full') mode = 'full'; }
+    else if (a === 'info') { info = !info; how = false; if (mode !== 'full') mode = 'full'; }
+    else if (a === 'how') { how = !how; info = false; if (mode !== 'full') mode = 'full'; }
     else if (a === 'off') mode = 'off';
     else if (tapped) { tapped = false; return; }               // already handled on pointerup
     else mode = mode === 'full' ? 'min' : 'full';
@@ -182,12 +190,13 @@
       (Math.abs(b.p82 - a.p82) >= 0.01 ? b.p82 - a.p82 : 0) || (Math.abs(b.avg - a.avg) >= 0.5 ? b.avg - a.avg : b.v - a.v));
     const top = scored[0] || null;
     // where the pick goes, and which already-picked players have to move to make room
-    // Where the pick goes. A two-position player goes where 82-0 calibre is cheapest (e.g. PF before C), which keeps
-    // the position with the most valuable players open. Moves on the court are only reported by the game with your
+    // Where the pick goes. A multi-position player goes to the open position where he ranks highest (his value is the
+    // same everywhere, so rank is what differs); moves are still allowed later. Moves on the court are only reported by the game with your
     // next pick, so the overlay may not know a teammate's current position: instead of "move X from A to B" it says
     // where each affected teammate must be, ordered so a move into an empty position comes first.
     const placement = c => {
-      const el = elite(), a = assign([...team, c.p], cur, (x, y) => (el[x] ?? 99) - (el[y] ?? 99)) || {};
+      // open position where he ranks highest; on a tie, the position whose top-25 line is lower (cheaper to fill well)
+      const el = elite(), a = assign([...team, c.p], cur, (p, x, y) => (rankNum(p, x) - rankNum(p, y)) || ((el[x] ?? 99) - (el[y] ?? 99))) || {};
       const slot = SLOTS.find(sl => a[sl] === c.p);
       const shares = q => (q.positions || []).some(x => (c.p.positions || []).includes(x));
       const need = SLOTS.filter(sl => a[sl] && a[sl] !== c.p && (cur.get(String(a[sl].player_id)) !== sl || ((a[sl].positions || []).length > 1 && shares(a[sl]))))
@@ -273,24 +282,52 @@
     return cache;
   }
 
+  // "?" view: how the game values players and teams (from the fitted model), applied to the current pick and team
+  function explain() {
+    const f = (x, d = 3) => (+x).toFixed(d), W = MODEL;
+    const lines = [];
+    lines.push(`<b>How 82-0 scores a team</b> <small>(worked out from ${W.GAMES} of your games; the game doesn't publish it)</small>`);
+    lines.push(`<b>Player value</b> = ${f(W.ppg)} &times; PPG + ${f(W.rpg)} &times; RPG + ${f(W.apg)} &times; APG + ${f(W.spg)} &times; SPG + ${f(W.bpg)} &times; BPG`);
+    lines.push(`<small>Steals and blocks count about 2&ndash;4&times; a point or assist. Players with no steals/blocks on record (1960s, early 1970s) get a flat +${f(W.NO_DEF, 2)} instead.</small>`);
+    lines.push(`<b>Team score</b> = the five values ${W.BASE < 0 ? '&minus;' : '+'} ${f(Math.abs(W.BASE), 2)}, plus ${f(W.BPG_EXTRA, 2)} for each team block up to ${f(W.BPG_BEND, 1)} <small>(so a team short on blocks is penalised harder)</small>`);
+    lines.push(`<b>Record</b> = 82 &times; (score &divide; 119.9)<sup>1.155</sup>, rounded. 82-0 needs a score of ${SCORE_82}.`);
+    lines.push(`<b>Grades</b> rank a player against every club/era stint at that position: S top 10, A+ top 25, A top 50, B top 100, C top 200.`);
+    const rec_ = cache?.rec;
+    if (rec_ && cell) {
+      const st = rec_.p.stats || {};
+      const parts = STATS.map(k => st[k] == null ? null : `${(+st[k]).toFixed(1)} ${k.toUpperCase()} &times; ${f(W[k])} = <b>${(W[k] * st[k]).toFixed(1)}</b>`).filter(Boolean);
+      if (st.spg == null && st.bpg == null) parts.push(`no steals/blocks on record = <b>+${f(W.NO_DEF, 1)}</b>`);
+      lines.push(`<hr style="border:0;border-top:1px solid #456;margin:5px 0"><b>${esc(rec_.p.name)}</b>: ${parts.join(', ')} &rarr; value <b>${val(rec_.p).toFixed(1)}</b>`);
+      const team = SLOTS.filter(sl => picks[sl]).map(sl => picks[sl]);
+      if (team.length) {
+        const withHim = [...team, rec_.p];
+        const sumV = withHim.reduce((a, p) => a + val(p), 0), bb = blockBonus(withHim), blk = withHim.reduce((a, p) => a + bpgOf(p), 0);
+        lines.push(`<b>Your team with him</b> (${withHim.length} of 5): values ${withHim.map(p => val(p).toFixed(1)).join(' + ')} = ${sumV.toFixed(1)}; blocks ${blk.toFixed(1)} &rarr; +${bb.toFixed(1)}. ${withHim.length === 5 ? `Score ${teamScore(withHim).toFixed(1)} = ${rec(teamScore(withHim))}.` : `Needs about ${(SCORE_82 - W.BASE - sumV - W.BPG_EXTRA * W.BPG_BEND).toFixed(1)} more from ${5 - withHim.length} player${5 - withHim.length > 1 ? 's' : ''} for 82-0 (with a full blocks bonus).`}`);
+      }
+    }
+    return lines.join('<br>');
+  }
+
   function render() {
     // hidden: a small round button where the panel was, visible on 82-0's dark page; tap it to bring the panel back
     if (mode === 'off') { P.style.cssText = `position:fixed;z-index:99999;${where()};width:30px;height:30px;border-radius:50%;background:#f59e0b;border:2px solid #fff;opacity:.75;cursor:pointer;touch-action:none;box-shadow:0 2px 8px rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;font:800 11px/1 system-ui,sans-serif;color:#1a1a1a`; P.innerHTML = '82'; return; }
     P.style.cssText = CSS_() + ';cursor:pointer';
-    const ctl = `<div style="position:relative;z-index:3;float:right;margin:-2px -3px 2px 6px"><span data-r82="info" style="${BTN}${info ? ';background:rgba(255,255,255,.4)' : ''}" title="Details">i</span><span data-r82="off" style="${BTN}" title="Hide everything">&times;</span></div>`;
-    let banner = '', body = '';
+    const ctl = `<div style="position:relative;z-index:3;float:right;margin:-2px -3px 2px 6px"><span data-r82="how" style="${BTN}${how ? ';background:rgba(255,255,255,.4)' : ''}" title="How players are valued">?</span><span data-r82="info" style="${BTN}${info ? ';background:rgba(255,255,255,.4)' : ''}" title="Details">i</span><span data-r82="off" style="${BTN}" title="Hide everything">&times;</span></div>`;
+    let banner = '', body = '', resultRows = false;
     if (result) {
       const d = result.score_display?.detail || {}, roster = result.roster || [];
-      const pred = roster.reduce((a, r) => a + val(r.player), 0) + MODEL.BASE;
+      const pred = teamScore(roster.map(r => r.player));
+      resultRows = true;
       banner = BAN('#0b3d6b', '#fff', `RESULT ${esc(result.score_display?.name ?? '')}`, `Game score ${esc(result.score)} (model said ${pred.toFixed(1)}). ${esc(d.grade ?? '')} ${esc(d.grade_label ?? '')}`);
-      body = roster.map(r => `${esc(r.slot)} ${esc(r.player?.name)} ${val(r.player).toFixed(1)}`).join('<br>');
+      body = roster.map(r => `${esc(r.slot)} <b>${esc(r.player?.name)}</b> &middot; ${posRank(r.player, r.slot)} &middot; ${val(r.player).toFixed(1)}`).join('<br>');
+      body = `<div style="margin:2px 0 4px">${body}</div>`;
     } else if (cell) { const a = advise(); banner = a.banner + (a.opts || ''); body = a.h; }
     else body = 'Waiting for the next spin or pick. Run this before your first spin so it can follow the whole game.';
     const all = Object.keys({ ...SITE, ...LOG.squads }).length, onlyLocal = Object.keys(LOG.squads).filter(k => !SITE[k]).length;
     const foot = `<br><small>${all} squads in use (${Object.keys(SITE).length} shared${onlyLocal ? `, ${onlyLocal} new on this device` : ''})${siteNote ? ' &middot; ' + esc(siteNote) : ''}<br>${LOG.games.length} games, ${Object.keys(LOG.squads).length} squads logged &middot; <span data-r82="export" style="text-decoration:underline;cursor:pointer">export log</span>${note ? ' &middot; ' + esc(note) : ''}<br>82-0 overlay ${VERSION} &middot; model from ${MODEL.GAMES} games</small>`;
     const warn = siteNote && /NOT LOADED/.test(siteNote) ? `<small style="color:#ffb74d">${esc(siteNote)}</small>` : '';
     if (mode === 'min') P.innerHTML = banner || '<b>82-0 overlay</b>';
-    else P.innerHTML = ctl + banner + (info ? body + foot : (warn || (cell || result ? '' : body)) + `<div style="font-size:10px;opacity:.55;margin-top:2px">tap to minimise &middot; drag to move &middot; i for details &middot; ${VERSION}</div>`);
+    else P.innerHTML = ctl + banner + (how ? `<div style="font-size:12px;line-height:1.45">${explain()}</div>` : info ? body + foot : (warn || (resultRows ? body : cell || result ? '' : body))) + (`<div style="font-size:10px;opacity:.55;margin-top:2px">tap to minimise &middot; drag to move &middot; ? how it works &middot; i details &middot; ${VERSION}</div>`);
   }
 
   const _fetch = window.fetch;
