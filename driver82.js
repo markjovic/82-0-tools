@@ -16,7 +16,7 @@
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   let stopped = false, games = 0, picks = 0, restarts = 0, skippedRerolls = 0;
-  let lastOutline = null;
+  const marker = document.createElement('div'); document.body.append(marker);
   const log = [];
   window.r82stop = () => { stopped = true; say('stopped by you'); };
   window.r82log = log;
@@ -39,10 +39,10 @@
   const click = async (el, what) => {
     if (!el) return false;
     el = (el.closest && el.closest('button,[role=button]')) || el;   // act on the whole button, not just its text
-    if (DRY_RUN) {   // outline stays until the next action, so it can be seen
-      if (lastOutline) { lastOutline.style.outline = lastOutline.dataset.r82o || ''; lastOutline.style.outlineOffset = ''; }
-      el.dataset.r82o = el.style.outline || ''; el.style.outline = '4px solid magenta'; el.style.outlineOffset = '2px'; lastOutline = el;
-      say('would click: ' + what); await sleep(1200); return true; }
+    if (DRY_RUN) {   // a magenta frame drawn over the page (not on the element, so nothing can clip it); stays until the next action
+      const r = el.getBoundingClientRect();
+      marker.style.cssText = `position:fixed;z-index:100001;pointer-events:none;border:4px solid magenta;border-radius:6px;box-shadow:0 0 0 3px rgba(255,0,255,.35);left:${r.left - 6}px;top:${r.top - 6}px;width:${r.width + 4}px;height:${r.height + 4}px`;
+      marker.title = what; say('would click: ' + what); await sleep(1200); return true; }
     const r = el.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2, o = { bubbles: true, cancelable: true, clientX: x, clientY: y, view: window };
     for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'])
       el.dispatchEvent(t.startsWith('pointer') ? new PointerEvent(t, { ...o, pointerId: 1, isPrimary: true }) : new MouseEvent(t, o));
@@ -92,6 +92,8 @@
     return RED_FLAGS.test(dlg) ? dlg.slice(0, 160) : null; };
 
   const diag = () => { const btns = [...document.querySelectorAll('button,[role=button],a')].filter(b => !ours(b) && visible(b)).map(b => (txt(b) || b.getAttribute('aria-label') || b.className || '?').slice(0, 30));
+    const labels = [...document.querySelectorAll('button,[role=button]')].filter(b => !ours(b) && visible(b) && b.getAttribute('aria-label')).map(b => b.getAttribute('aria-label'));
+    console.log('[82-0 driver] button labels:', labels);
     console.log('[82-0 driver] visible buttons:', btns, '| overlay next:', window.r820?.next, '| state:', window.r820?.state, '| court found:', !!court(), '| search box:', !!searchBox()); };
 
   // wait for the overlay to publish new advice (proves the last action registered)
@@ -148,7 +150,7 @@
   const dist = (a, b) => { const r = a.getBoundingClientRect(), q = b.getBoundingClientRect(); return Math.hypot(r.left - q.left, r.top - q.top); };
   async function finishGame() {
     for (let i = 0; i < 6 && !stopped; i++) {      // reward / level-up screens come in some order
-      const claim = button(/^claim\b/i), tap = byText(/tap anywhere/i)[0], again = button(/^draft again\b/i);
+      const claim = byText(/^claim\b/i).filter(el => !/x2|double|watch|\bad\b|video/i.test(txt(el.closest('button,[role=button]') || el))).sort((a, b) => txt(a).length - txt(b).length)[0] || null, tap = byText(/tap anywhere/i)[0], again = button(/^draft again\b/i);
       if (claim) { await click(claim, 'CLAIM'); continue; }
       if (tap) { await click(tap, 'level-up'); continue; }
       if (again) { await click(again, 'DRAFT AGAIN'); await sleep(1500); return true; }
@@ -192,10 +194,11 @@
     say(`${kind.startsWith('REROLL') ? 'skip re-roll, ' : ''}take ${name} → ${slot}`);
     if (!(await pickPlayer(name, slot))) break;
     // placing is local; the pick is only sent when SPIN (or, after the fifth pick, the finishing button) is pressed
+    // ...except the fifth pick: the game sends it and shows the result by itself, with no button to press
     const last = (window.r820?.state?.picked?.length || 0) >= 4;
-    if (!(await spin(last))) { await fail(last ? 'placed the fifth player but found no button to finish the draft' : 'placed the player but found no SPIN button to send the pick'); break; }
+    if (!last && !(await spin(false))) { await fail('placed the player but found no SPIN button to send the pick'); break; }
     if (!(await waitSeq(seq))) {   // one retry: the court may not have been ready, so place again and re-send
-      const s = slotEl(slot); if (s) { say(`retrying ${slot} for ${name}`); await click(s, slot); await spin(last); }
+      const s = slotEl(slot); if (s) { say(`retrying ${slot} for ${name}`); await click(s, slot); if (!last) await spin(false); }
       if (!(await waitSeq(seq))) { await fail(`pick of ${name} → ${slot} did not register`); break; }
     }
     picks++;
