@@ -13,6 +13,8 @@
   // keeps C free, takes only S-grade (top 10) players elsewhere, abandons any draft with no S-grade player on offer,
   // and pauses for you the moment the #1 C appears.
   let MODE = window.r82mode === 'wilt' ? 'wilt' : 'advice';
+  // caps apply per batch: when one is reached the driver stops, and pressing Resume / Auto / Wilt starts a new batch
+  let gamesEnd = MAX_GAMES, restartsEnd = MAX_RESTARTS;
   let finishAfterGame = false;
   const GAP_MS     = 700;    // pause between actions (human pace; don't go much lower)
   const COURT_MS   = 1700;   // the court slides in after a player is selected; clicks before this are ignored
@@ -37,6 +39,8 @@
   window.r82setMode = m => { MODE = m === 'wilt' ? 'wilt' : 'advice'; finishAfterGame = false; foundWilt = false; };
   window.r82state = () => ({ running: looping && !stopped, mode: MODE, foundWilt, games, picks, restarts });
   window.r82resume = () => { if (looping) return; stopped = false;
+    if (games >= gamesEnd) gamesEnd = games + MAX_GAMES;
+    if (restarts >= restartsEnd) restartsEnd = restarts + MAX_RESTARTS;
     if (foundWilt) { MODE = 'advice'; finishAfterGame = true; foundWilt = false; say('resuming: finishing this draft on the overlay\'s advice, then stopping'); }
     runLoop(); };
   window.r82log = log;
@@ -50,7 +54,7 @@
   let lastTone = null;
   const say = (msg, tone) => { lastTone = tone ?? null; log.push(new Date().toISOString().slice(11, 19) + ' ' + msg);
     box.style.background = tone === 'gold' ? '#a16207' : tone ? '#991b1b' : '#111827';
-    box.innerHTML = `<b>82-0 driver</b> ${MODE === 'wilt' ? '&middot; WILT HUNT' : ''} ${DRY_RUN ? '(DRY RUN)' : ''}<br>games ${games}/${MAX_GAMES} &middot; picks ${picks} &middot; restarts ${restarts}<br>${msg}<br>`
+    box.innerHTML = `<b>82-0 driver</b> ${MODE === 'wilt' ? '&middot; WILT HUNT' : ''} ${DRY_RUN ? '(DRY RUN)' : ''}<br>games ${games}/${gamesEnd} &middot; picks ${picks} &middot; restarts ${restarts}<br>${msg}<br>`
       + (looping && !stopped ? `<button data-d="pause" style="${BTN}">Pause</button>` : `<button data-d="resume" style="${BTN}">Resume</button>`);
     console.log('[82-0 driver]', msg); try { window.r82render?.(); } catch (e) {} };
   box.addEventListener('click', e => { const d = e.target.closest && e.target.closest('[data-d]'); if (!d) return;
@@ -236,7 +240,7 @@
   let lastResultSeen = null, idle = 0;
   async function runLoop() {
   looping = true; say(MODE === 'wilt' ? 'hunting for the #1 C' : 'running');
-  while (!stopped && games < MAX_GAMES && restarts < MAX_RESTARTS) {
+  while (!stopped && games < gamesEnd && restarts < restartsEnd) {
     const flag = checkRedFlags(); if (flag) { await fail('unexpected prompt: ' + flag); break; }
     await whileHidden();
     const stray = findClaim() || byText(/tap anywhere/i)[0];
@@ -291,7 +295,7 @@
     }
     picks++;
   }
-  if (!stopped) say(`done: ${games} games, ${picks} picks, ${restarts} restarts, ${skippedRerolls} re-rolls skipped`);
+  if (!stopped) say(`batch done (${games >= gamesEnd ? MAX_GAMES + ' games' : MAX_RESTARTS + ' restarts'}): ${games} games, ${picks} picks, ${restarts} restarts so far. Press Resume for another batch.`);
   looping = false; say(log[log.length - 1].slice(9), lastTone);   // redraw with a Resume button, same colour
   }
   if (!window.r820 || !/^v(\d+)/.test(window.r820.version || '') || +window.r820.version.slice(1) < 32) return fail('overlay v32+ not loaded (run r820 first)');
