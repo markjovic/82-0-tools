@@ -9,7 +9,7 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null };
-  const VERSION = 'v31';
+  const VERSION = 'v33';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -165,6 +165,8 @@
     const m = e.target.closest && e.target.closest('[data-r82]');
     const a = m ? m.getAttribute('data-r82') : null;
     if (a === 'export') exportLog();
+    else if (a === 'drv-auto' || a === 'drv-wilt') driverGo(a === 'drv-wilt' ? 'wilt' : 'advice');
+    else if (a === 'drv-pause') { try { window.r82stop?.(); } catch (er) {} }
     else if (a === 'info') { info = !info; how = false; if (mode !== 'full') mode = 'full'; }
     else if (a === 'how') { how = !how; info = false; if (mode !== 'full') mode = 'full'; }
     else if (a === 'off') mode = 'off';
@@ -344,11 +346,37 @@
       body = `<div style="margin:2px 0 4px">${body}</div>`;
       publish(`RESULT|${d.wins ?? ''}-${d.losses ?? ''}|${result.score}`, { type: 'RESULT', wins: d.wins, losses: d.losses, score: result.score, model: +pred.toFixed(1), roster: roster.map(r => ({ slot: r.slot, name: r.player?.name })) });
     } else if (cell) { const a = advise(); banner = a.banner + (a.opts || ''); body = a.h;
-      publish(a.act?.next || 'NONE', { ...(a.act || { type: 'NONE' }), club: cell.team?.abbr, era: cell.era, picked: SLOTS.filter(sl => picks[sl]).map(sl => ({ slot: sl, name: picks[sl].name })) });
+      const usedIds = new Set(SLOTS.filter(sl => picks[sl]).map(sl => String(picks[sl].player_id)));
+      const offer = (cell.squad || []).filter(p => !usedIds.has(String(p.player_id))).map(p => ({ name: p.name, positions: p.positions, value: +val(p).toFixed(2),
+        ranks: Object.fromEntries((p.positions || []).filter(x => SLOTS.includes(x)).map(x => [x, rankNum(p, x)])) }));
+      publish(a.act?.next || 'NONE', { ...(a.act || { type: 'NONE' }), club: cell.team?.abbr, era: cell.era, picked: SLOTS.filter(sl => picks[sl]).map(sl => ({ slot: sl, name: picks[sl].name })), offer });
     } else publish('WAIT', { type: 'WAIT' });
     if (!result && !cell) body = 'Waiting for the next spin or pick. Run this before your first spin so it can follow the whole game.';
     return { banner, body, resultRows };
   }
+
+  // ---------- auto-driver controls ----------
+  const DRIVER_URL = 'https://markjovic.github.io/82-0-tools/driver82.js';
+  let driverLoading = false;
+  function driverGo(mode) {
+    if (window.r82setMode) { window.r82setMode(mode); window.r82resume(); return; }   // already loaded: switch and go
+    if (driverLoading) return;
+    driverLoading = true; window.r82dry = false; window.r82mode = mode;
+    const sc = document.createElement('script'); sc.src = DRIVER_URL + '?v=' + Date.now();
+    sc.onload = () => { driverLoading = false; render(); };
+    sc.onerror = () => { driverLoading = false; note = 'AUTO-DRIVER COULD NOT BE LOADED'; render(); };
+    document.head.append(sc); render();
+  }
+  const driverBar = () => {
+    const st = window.r82state?.(), running = st?.running;
+    const b = (act, label, on, title) => `<span data-r82="${act}" title="${title}" style="${BTN};${on ? 'background:#f59e0b;color:#1a1a1a' : ''}">${label}</span>`;
+    const what = driverLoading ? 'loading…' : running ? (st.mode === 'wilt' ? `hunting Wilt · ${st.restarts} restarts` : `auto · game ${st.games + 1}`) : st?.foundWilt ? '#1 C found: your turn' : st ? 'paused' : 'off';
+    return `<div style="margin:2px 0 5px;display:flex;align-items:center;gap:2px;flex-wrap:wrap"><small style="opacity:.75;margin-right:4px">Auto: ${what}</small>`
+      + b('drv-auto', '&#9654; Auto', running && st.mode === 'advice', 'Play drafts by the overlay\'s advice')
+      + b('drv-wilt', '&#127919; Wilt', running && st.mode === 'wilt', 'Hunt for the #1 C: S-grade picks only, C kept free, pauses when he appears')
+      + (running ? b('drv-pause', '&#10074;&#10074; Pause', false, 'Pause the auto-driver') : '') + '</div>';
+  };
+  window.r82render = () => render();
 
   function render() {
     // hidden: a small round button where the panel was, visible on 82-0's dark page; tap it to bring the panel back
@@ -360,7 +388,7 @@
     const foot = `<br><small>${all} squads in use (${Object.keys(SITE).length} shared${onlyLocal ? `, ${onlyLocal} new on this device` : ''})${siteNote ? ' &middot; ' + esc(siteNote) : ''}<br>${LOG.games.length} games, ${Object.keys(LOG.squads).length} squads logged &middot; <span data-r82="export" style="text-decoration:underline;cursor:pointer">export log</span>${note ? ' &middot; ' + esc(note) : ''}<br>82-0 overlay ${VERSION} &middot; model from ${MODEL.GAMES} games</small>`;
     const warn = siteNote && /NOT LOADED/.test(siteNote) ? `<small style="color:#ffb74d">${esc(siteNote)}</small>` : '';
     if (mode === 'min') P.innerHTML = banner || '<b>82-0 overlay</b>';
-    else P.innerHTML = ctl + banner + (how ? `<div style="font-size:12px;line-height:1.45">${explain()}</div>` : info ? body + foot : (warn || (resultRows ? body : cell || result ? '' : body))) + (`<div style="font-size:10px;opacity:.55;margin-top:2px">tap to minimise &middot; drag to move &middot; ? how it works &middot; i details &middot; ${VERSION}</div>`);
+    else P.innerHTML = ctl + banner + driverBar() + (how ? `<div style="font-size:12px;line-height:1.45">${explain()}</div>` : info ? body + foot : (warn || (resultRows ? body : cell || result ? '' : body))) + (`<div style="font-size:10px;opacity:.55;margin-top:2px">tap to minimise &middot; drag to move &middot; ? how it works &middot; i details &middot; ${VERSION}</div>`);
   }
 
   const _fetch = window.fetch;

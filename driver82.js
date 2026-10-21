@@ -8,6 +8,12 @@
 
   // ---------- settings ----------
   const MAX_GAMES  = 30;     // stop after this many finished games
+  const MAX_RESTARTS = 400;  // Wilt hunt: stop after this many abandoned drafts
+  // mode: 'advice' plays every draft by the overlay's advice; 'wilt' hunts for the #1 C (Wilt Chamberlain, PHI 1960s):
+  // keeps C free, takes only S-grade (top 10) players elsewhere, abandons any draft with no S-grade player on offer,
+  // and pauses for you the moment the #1 C appears.
+  let MODE = window.r82mode === 'wilt' ? 'wilt' : 'advice';
+  let finishAfterGame = false;
   const GAP_MS     = 700;    // pause between actions (human pace; don't go much lower)
   const COURT_MS   = 1700;   // the court slides in after a player is selected; clicks before this are ignored
   const SEQ_WAIT   = 9000;   // how long to wait for the overlay to confirm an action registered
@@ -26,7 +32,13 @@
   let stopped = false, games = 0, picks = 0, restarts = 0, skippedRerolls = 0;
   const marker = document.createElement('div'); document.body.append(marker);
   const log = [];
-  window.r82stop = () => { stopped = true; say('stopped by you'); };
+  window.r82stop = () => { stopped = true; say('paused by you'); };
+  // controls used by the overlay's buttons
+  window.r82setMode = m => { MODE = m === 'wilt' ? 'wilt' : 'advice'; finishAfterGame = false; foundWilt = false; };
+  window.r82state = () => ({ running: looping && !stopped, mode: MODE, foundWilt, games, picks, restarts });
+  window.r82resume = () => { if (looping) return; stopped = false;
+    if (foundWilt) { MODE = 'advice'; finishAfterGame = true; foundWilt = false; say('resuming: finishing this draft on the overlay\'s advice, then stopping'); }
+    runLoop(); };
   window.r82log = log;
 
   // ---------- status box ----------
@@ -34,8 +46,16 @@
   box.id = 'r82drvbox';
   box.style.cssText = 'position:fixed;left:6px;top:6px;z-index:100000;background:#111827;color:#fff;font:12px/1.35 system-ui,sans-serif;padding:6px 8px;border-radius:6px;max-width:300px;opacity:.9';
   document.body.append(box);
-  const say = (msg, bad) => { log.push(new Date().toISOString().slice(11, 19) + ' ' + msg); box.style.background = bad ? '#991b1b' : '#111827';
-    box.innerHTML = `<b>82-0 driver</b> ${DRY_RUN ? '(DRY RUN)' : ''}<br>games ${games}/${MAX_GAMES} &middot; picks ${picks} &middot; restarts ${restarts}<br>${msg}<br><small>r82stop() to stop</small>`; console.log('[82-0 driver]', msg); };
+  const BTN = 'margin:4px 4px 0 0;padding:2px 8px;border-radius:4px;border:0;font:700 11px system-ui,sans-serif;cursor:pointer';
+  let lastTone = null;
+  const say = (msg, tone) => { lastTone = tone ?? null; log.push(new Date().toISOString().slice(11, 19) + ' ' + msg);
+    box.style.background = tone === 'gold' ? '#a16207' : tone ? '#991b1b' : '#111827';
+    box.innerHTML = `<b>82-0 driver</b> ${MODE === 'wilt' ? '&middot; WILT HUNT' : ''} ${DRY_RUN ? '(DRY RUN)' : ''}<br>games ${games}/${MAX_GAMES} &middot; picks ${picks} &middot; restarts ${restarts}<br>${msg}<br>`
+      + (looping && !stopped ? `<button data-d="pause" style="${BTN}">Pause</button>` : `<button data-d="resume" style="${BTN}">Resume</button>`);
+    console.log('[82-0 driver]', msg); try { window.r82render?.(); } catch (e) {} };
+  box.addEventListener('click', e => { const d = e.target.closest && e.target.closest('[data-d]'); if (!d) return;
+    if (d.dataset.d === 'pause') window.r82stop(); else window.r82resume(); });
+  let looping = false, foundWilt = false;
   const fail = async msg => { stopped = true; say('STOPPED: ' + msg + '<br><small>see r82log and the console</small>', true); diag(); };
 
   // ---------- page helpers ----------
@@ -212,11 +232,11 @@
     await click(b, txt(b).toUpperCase()); return true;
   }
 
-  // ---------- main loop ----------
-  if (!window.r820 || !/^v(\d+)/.test(window.r820.version || '') || +window.r820.version.slice(1) < 30) return fail('overlay v30+ not loaded (run r820 first)');
-  say('running');
+  // ---------- main loop (can be paused and resumed) ----------
   let lastResultSeen = null, idle = 0;
-  while (!stopped && games < MAX_GAMES) {
+  async function runLoop() {
+  looping = true; say(MODE === 'wilt' ? 'hunting for the #1 C' : 'running');
+  while (!stopped && games < MAX_GAMES && restarts < MAX_RESTARTS) {
     const flag = checkRedFlags(); if (flag) { await fail('unexpected prompt: ' + flag); break; }
     await whileHidden();
     const stray = findClaim() || byText(/tap anywhere/i)[0];
@@ -228,8 +248,27 @@
     if (kind === 'NONE') { await fail('overlay says nobody on this spin fits'); break; }
     if (kind === 'RESULT') {
       const key = parts.slice(1).join('|') + '|' + window.r820.seq;
-      if (lastResultSeen !== key) { lastResultSeen = key; games++; say(`game ${games}: ${parts[1]} (score ${parts[2]}, model ${window.r820.state?.model})`); }
+      if (lastResultSeen !== key) { lastResultSeen = key; games++; say(`game ${games}: ${parts[1]} (score ${parts[2]}, model ${window.r820.state?.model})`);
+        if (finishAfterGame) { stopped = true; say(`done: the #1 C draft finished ${parts[1]} (score ${parts[2]})`, 'gold'); break; } }
       await finishGame(); await waitSeq(seq, 4000); continue;
+    }
+    if (MODE === 'wilt') {
+      const st = window.r820.state || {}, offer = st.offer || [], open = st.open || [];
+      const wilt = offer.find(p => p.ranks && p.ranks.C === 1);
+      if (wilt) { foundWilt = true; stopped = true;
+        say(`FOUND the #1 C: ${wilt.name} (value ${wilt.value}). Your turn. Press Resume to let it finish this draft on the overlay's advice.`, 'gold');
+        try { const ac = new AudioContext(), o = ac.createOscillator(); o.frequency.value = 880; o.connect(ac.destination); o.start(); o.stop(ac.currentTime + 0.4); } catch (e) {}   // a short beep
+        break; }
+      const nonC = open.filter(x => x !== 'C');
+      const cands = offer.flatMap(p => Object.entries(p.ranks || {}).filter(([x, r]) => nonC.includes(x) && r <= 10).map(([x, r]) => ({ name: p.name, slot: x, r, v: p.value })))
+        .sort((a, b) => b.v - a.v || a.r - b.r);
+      if (!cands.length) { restarts++; say(`no S-grade player for ${nonC.join('/') || 'any open position'} on ${st.club} ${st.era}: new draft`); if (!(await restart())) break; await waitSeq(seq, 6000); continue; }
+      const c = cands[0];
+      say(`S-grade: take ${c.name} → ${c.slot} (#${c.r} ${c.slot})`);
+      if (!(await pickPlayer(c.name, c.slot))) break;
+      if (!(await spin(false))) { await fail('placed the player but found no SPIN button to send the pick'); break; }
+      if (!(await waitSeq(seq))) { await fail(`pick of ${c.name} → ${c.slot} did not register`); break; }
+      picks++; continue;
     }
     if (kind === 'RESTART') { restarts++; say('restart (weak first spin)'); if (!(await restart())) break; await waitSeq(seq, 6000); continue; }
     // TAKE, MOVE...|TAKE, or REROLL_* (never re-roll: take the "otherwise" pick)
@@ -253,5 +292,8 @@
     picks++;
   }
   if (!stopped) say(`done: ${games} games, ${picks} picks, ${restarts} restarts, ${skippedRerolls} re-rolls skipped`);
-  window.r82drv = false;
+  looping = false; say(log[log.length - 1].slice(9), lastTone);   // redraw with a Resume button, same colour
+  }
+  if (!window.r820 || !/^v(\d+)/.test(window.r820.version || '') || +window.r820.version.slice(1) < 32) return fail('overlay v32+ not loaded (run r820 first)');
+  runLoop();
 })();
