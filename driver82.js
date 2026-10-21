@@ -278,6 +278,28 @@
     return startClassic();
   }
   async function startClassic() {
+    // New start screen (Oct 2026): a world carousel with one PLAY button, a PRO BASKETBALL / COLLEGE switch and a
+    // CLASSIC / 1 VS 1 / HOOP IQ mode switch, each marking its choice with aria-selected / aria-pressed.
+    // Make sure PRO BASKETBALL and CLASSIC are the selected ones, then press PLAY. Never touch MODE or the arrows.
+    const sel = b => (b.getAttribute('aria-selected') || b.getAttribute('aria-pressed') || '') === 'true';
+    const btnText = re => [...document.querySelectorAll('button,[role=button]')].filter(b => !ours(b) && visible(b) && re.test(txt(b).replace(/\s+/g, ' ').trim()));
+    const newScreen = () => btnText(/^pro basketball$/i)[0] || null;
+    if (await waitFor(() => newScreen() || btnText(/^play$/i)[0] || null, 'the start screen')) {
+      if (newScreen()) {
+        const ensure = async (re, what) => {
+          const b = btnText(re)[0]; if (!b) return fail(`start screen: "${what}" option not found`, true);
+          if (sel(b)) return true;
+          await click(b, what); await sleep(700);
+          return sel(btnText(re)[0] || b) || DRY_RUN || fail(`start screen: couldn't select "${what}"`, true); };
+        if (!(await ensure(/^pro basketball$/i, 'PRO BASKETBALL'))) return false;
+        if (btnText(/^classic$/i).length && !(await ensure(/^classic$/i, 'CLASSIC'))) return false;
+        const plays = btnText(/^play$/i);
+        if (plays.length !== 1) return fail(`start screen: expected one PLAY button, found ${plays.length}`, true);
+        await click(plays[0], 'PLAY (Classic, Pro Basketball)'); await sleep(1500);
+        return true;
+      }
+    }
+    // Older start screen: one card per mode, each with its own PLAY.
     // On the home screen the Classic card has its own button. Its wording isn't certain, so accept a button
     // reading PLAY near the word CLASSIC, or one reading "Play Classic" / "Classic".
     // The start screen has several PLAY buttons (each mode card, Trivia, and the PLAY tab in the bottom bar).
