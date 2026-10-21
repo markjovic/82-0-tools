@@ -39,6 +39,10 @@
   const click = async (el, what) => {
     if (!el) return false;
     el = (el.closest && el.closest('button,[role=button]')) || el;   // act on the whole button, not just its text
+    // hard block: never press boosters, re-rolls, sharing, account or ad controls, whatever the logic above decided
+    const label = ((el.getAttribute && el.getAttribute('aria-label')) || '') + ' ' + txt(el);
+    if (/double pick|\btrade\b|\bprime\b|respin|booster|share results|sign out|watch|\bx2\b|rewarded|coin balance/i.test(label)) {
+      await fail(`refused to click a blocked control: "${label.trim().slice(0, 60)}"`); return false; }
     if (DRY_RUN) {   // a magenta frame drawn over the page (not on the element, so nothing can clip it); stays until the next action
       const r = el.getBoundingClientRect();
       marker.style.cssText = `position:fixed;z-index:100001;pointer-events:none;border:4px solid magenta;border-radius:6px;box-shadow:0 0 0 3px rgba(255,0,255,.35);left:${r.left - 6}px;top:${r.top - 6}px;width:${r.width + 4}px;height:${r.height + 4}px`;
