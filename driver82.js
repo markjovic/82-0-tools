@@ -139,15 +139,39 @@
       || [...document.querySelectorAll('button')].filter(b => !ours(b) && visible(b)).sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top || a.getBoundingClientRect().left - b.getBoundingClientRect().left)[0];
     if (!back) return fail('back button not found for RESTART');
     await click(back, 'back');
-    const quit = await waitFor(() => button(/^yes,?\s*quit\b/i), '"Yes, Quit"'); if (!quit) return fail('"Yes, Quit" not found');
-    await click(quit, 'Yes, Quit'); await sleep(1200);
+    // the quit dialog animates in: let it settle before pressing, and press again if it's still there
+    const findQuit = () => button(/^yes,?\s*quit\b/i);
+    let quit = await waitFor(findQuit, '"Yes, Quit"'); if (!quit) return fail('"Yes, Quit" not found');
+    for (let i = 0; i < 3 && quit && !stopped; i++) {
+      await sleep(600); await click(quit, 'Yes, Quit'); await sleep(900);
+      if (DRY_RUN) break;
+      quit = findQuit();
+    }
+    if (quit && !DRY_RUN) return fail('"Yes, Quit" was pressed 3 times but the dialog is still open');
     return startClassic();
   }
   async function startClassic() {
-    const findPlay = () => { const classic = byText(/^classic$/i)[0], plays = byText(/^play$/i);
-      return classic ? plays.sort((a, b) => dist(a, classic) - dist(b, classic))[0] : plays[0]; };
-    const play = await waitFor(findPlay, 'Classic "PLAY"');
-    if (!play) return fail('Classic "PLAY" not found');
+    // On the home screen the Classic card has its own button. Its wording isn't certain, so accept a button
+    // reading PLAY near the word CLASSIC, or one reading "Play Classic" / "Classic".
+    // The start screen has several PLAY buttons (each mode card, Trivia, and the PLAY tab in the bottom bar).
+    // Take the one inside the same card as the CLASSIC heading: climb from the heading until a container holds
+    // exactly one PLAY button.
+    const findPlay = () => {
+      const heading = byText(/^classic$/i)[0]; if (!heading) return null;
+      const plays = byText(/^play$/i);
+      for (let a = heading.parentElement; a && a !== document.body; a = a.parentElement) {
+        const inside = plays.filter(p => a.contains(p));
+        if (inside.length === 1) return inside[0];
+        if (inside.length > 1) break;
+      }
+      return null; };
+    let play = await waitFor(findPlay, 'Classic "PLAY"');
+    if (!play) {
+      // fall back to the game's own page router, which opens the Classic draft without reloading (keeps the overlay)
+      const router = window.next?.router;
+      if (router?.push) { say('opening Classic via the page router'); if (!DRY_RUN) await router.push('/draft?mode=classic'); await sleep(1500); return true; }
+      return fail('Classic "PLAY" not found on the start screen');
+    }
     await click(play, 'Classic PLAY'); await sleep(1500);
     return true;
   }
