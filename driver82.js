@@ -19,6 +19,7 @@
   // Wilt hunt: once a draft has 2 S-grade picks it is kept and played to the end on the overlay's advice (for the
   // coins), still pausing if the #1 C turns up. sPicks counts S-grade picks in the current draft.
   const KEEP_AFTER_S = 2;
+  const HUNT_TOP_C = 2;   // pause when a C ranked this high or better is on offer: #1 and #2 are both Wilt (SFW and PHI 1960s)
   let sPicks = 0;
   const GAP_MS     = 700;    // pause between actions (human pace; don't go much lower)
   const COURT_MS   = 1700;   // the court slides in after a player is selected; clicks before this are ignored
@@ -248,7 +249,7 @@
   // ---------- main loop (can be paused and resumed) ----------
   let lastResultSeen = null, idle = 0;
   async function runLoop() {
-  looping = true; say(MODE === 'wilt' ? 'hunting for the #1 C' : 'running');
+  looping = true; say(MODE === 'wilt' ? 'hunting for Wilt (#1 or #2 C)' : 'running');
   while (!stopped && games < gamesEnd && restarts < restartsEnd) {
     const flag = checkRedFlags(); if (flag) { await fail('unexpected prompt: ' + flag); break; }
     await whileHidden();
@@ -267,9 +268,9 @@
     }
     if (MODE === 'wilt') {
       const st = window.r820.state || {}, offer = st.offer || [], open = st.open || [];
-      const wilt = offer.find(p => p.ranks && p.ranks.C === 1);
+      const wilt = offer.filter(p => p.ranks && p.ranks.C <= HUNT_TOP_C).sort((a, b) => a.ranks.C - b.ranks.C)[0];
       if (wilt) { foundWilt = true; stopped = true;
-        say(`FOUND the #1 C: ${wilt.name} (value ${wilt.value}). Your turn. Press Resume to let it finish this draft on the overlay's advice.`, 'gold');
+        say(`FOUND the #${wilt.ranks.C} C: ${wilt.name} ${st.club} ${st.era} (value ${wilt.value}). Your turn. Press Resume to let it finish this draft on the overlay's advice.`, 'gold');
         try { const ac = new AudioContext(), o = ac.createOscillator(); o.frequency.value = 880; o.connect(ac.destination); o.start(); o.stop(ac.currentTime + 0.4); } catch (e) {}   // a short beep
         break; }
       if (sPicks >= KEEP_AFTER_S) { /* committed: play the rest of this draft on the overlay's advice below */ }
