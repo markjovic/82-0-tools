@@ -4,8 +4,12 @@
 // keeps being logged so the model can be re-checked.
 (() => {
   if (window.r820) return;
-  window.r820 = 1;
-  const VERSION = 'v28';
+  // window.r820 doubles as the load guard and a machine-readable state for automation:
+  //   r820.next  e.g. "TAKE|Magic Johnson|PF", "MOVE|Paul Pierce>SG|TAKE|Cliff Hagan|SF", "REROLL_TEAM|Walt Bellamy|C"
+  //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
+  //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
+  window.r820 = { version: null, next: 'WAIT', seq: 0, state: null };
+  const VERSION = 'v29';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -208,9 +212,9 @@
         const ready = pending.filter(m => !occupied.has(m.to)); const next = ready.length ? ready : [pending[0]];
         for (const m of next) { ordered.push(m); occupied.delete(m.from); occupied.add(m.to); }
         pending = pending.filter(m => !next.includes(m)); }
-      const moves = ordered.map(m => `${esc(m.p.name)} &rarr; ${m.to}`);
+      const moves = ordered.map(m => `${esc(m.p.name)} &rarr; ${m.to}`), movesRaw = ordered.map(m => ({ name: m.p.name, to: m.to }));
       const keep = need.filter(m => !m.moved).map(m => `${esc(m.p.name)} at ${m.to}`);
-      return { slot, moves, keep }; };
+      return { slot, moves, keep, movesRaw }; };
     const qs = squads();
     const clubPool = qs.filter(q => q.era === cell.era && q.team?.team_id !== cell.team?.team_id);
     const eraPool = qs.filter(q => q.team?.team_id === cell.team?.team_id && q.era !== cell.era);
@@ -278,7 +282,18 @@
     if (coins != null) h += `<br><small>Coins: ${coins} (${Math.floor(coins / COIN_COST)} re-roll${Math.floor(coins / COIN_COST) === 1 ? '' : 's'} at ${COIN_COST})</small>`;
     const none = ['team', 'era'].filter(k => avail(k) === false).map(k => k === 'team' ? 'Team' : 'Era');
     if (none.length) h += `<br><small>${none.length === 2 ? 'No re-rolls left' : none[0] + ' re-roll: none left'}${cell.boosters ? ' (per the game)' : ''}.</small>`;
-    cache = { sig, banner: top_ + oddsHtml, opts: restart ? '' : opts, h, rec: top };
+    // machine-readable instruction (same decision as the top bar)
+    let act;
+    if (!top) act = { type: 'NONE' };
+    else if (restart) act = { type: 'RESTART' };
+    else { const pl = placement(top);
+      const take = { name: top.p.name, slot: pl.slot, moves: pl.movesRaw || [] };
+      act = better ? { type: better.name === 'Era' ? 'REROLL_ERA' : 'REROLL_TEAM', otherwise: take, cost: better.cost.replace(/^ \(|\)$/g, '') || 'free' } : { type: 'TAKE', ...take }; }
+    const t = act.type === 'TAKE' ? act : act.otherwise;
+    const takeStr = t ? `${t.moves.length ? 'MOVE|' + t.moves.map(m => `${m.name}>${m.to}`).join('|') + '|' : ''}TAKE|${t.name}|${t.slot}` : '';
+    act.next = act.type === 'TAKE' ? takeStr : act.type.startsWith('REROLL') ? `${act.type}|${t.name}|${t.slot}` : act.type;
+    act.open = SLOTS.filter(sl => !picks[sl]); act.p82 = (better || top)?.p82 ?? null; act.projected = top ? rec((better || top).avg) : null;
+    cache = { sig, banner: top_ + oddsHtml, opts: restart ? '' : opts, h, rec: top, act };
     return cache;
   }
 
@@ -308,11 +323,16 @@
     return lines.join('<br>');
   }
 
-  function render() {
-    // hidden: a small round button where the panel was, visible on 82-0's dark page; tap it to bring the panel back
-    if (mode === 'off') { P.style.cssText = `position:fixed;z-index:99999;${where()};width:30px;height:30px;border-radius:50%;background:#f59e0b;border:2px solid #fff;opacity:.75;cursor:pointer;touch-action:none;box-shadow:0 2px 8px rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;font:800 11px/1 system-ui,sans-serif;color:#1a1a1a`; P.innerHTML = '82'; return; }
-    P.style.cssText = CSS_() + ';cursor:pointer';
-    const ctl = `<div style="position:relative;z-index:3;float:right;margin:-2px -3px 2px 6px"><span data-r82="how" style="${BTN}${how ? ';background:rgba(255,255,255,.4)' : ''}" title="How players are valued">?</span><span data-r82="info" style="${BTN}${info ? ';background:rgba(255,255,255,.4)' : ''}" title="Details">i</span><span data-r82="off" style="${BTN}" title="Hide everything">&times;</span></div>`;
+  // publish the current instruction for automation; seq bumps whenever it changes
+  let lastPub = '';
+  function publish(next, state) {
+    const key = next + '|' + JSON.stringify(state);
+    if (key !== lastPub) { lastPub = key; window.r820.seq++; }
+    window.r820.version = VERSION; window.r820.next = next; window.r820.state = state;
+  }
+
+  // works out the advice and publishes it on window.r820, even while the panel is hidden
+  function compute() {
     let banner = '', body = '', resultRows = false;
     if (result) {
       const d = result.score_display?.detail || {}, roster = result.roster || [];
@@ -321,8 +341,20 @@
       banner = BAN('#0b3d6b', '#fff', `RESULT ${esc(result.score_display?.name ?? '')}`, `Game score ${esc(result.score)} (model said ${pred.toFixed(1)}). ${esc(d.grade ?? '')} ${esc(d.grade_label ?? '')}`);
       body = roster.map(r => `${esc(r.slot)} <b>${esc(r.player?.name)}</b> &middot; ${posRank(r.player, r.slot)} &middot; ${val(r.player).toFixed(1)}`).join('<br>');
       body = `<div style="margin:2px 0 4px">${body}</div>`;
-    } else if (cell) { const a = advise(); banner = a.banner + (a.opts || ''); body = a.h; }
-    else body = 'Waiting for the next spin or pick. Run this before your first spin so it can follow the whole game.';
+      publish(`RESULT|${d.wins ?? ''}-${d.losses ?? ''}|${result.score}`, { type: 'RESULT', wins: d.wins, losses: d.losses, score: result.score, model: +pred.toFixed(1), roster: roster.map(r => ({ slot: r.slot, name: r.player?.name })) });
+    } else if (cell) { const a = advise(); banner = a.banner + (a.opts || ''); body = a.h;
+      publish(a.act?.next || 'NONE', { ...(a.act || { type: 'NONE' }), club: cell.team?.abbr, era: cell.era, picked: SLOTS.filter(sl => picks[sl]).map(sl => ({ slot: sl, name: picks[sl].name })) });
+    } else publish('WAIT', { type: 'WAIT' });
+    if (!result && !cell) body = 'Waiting for the next spin or pick. Run this before your first spin so it can follow the whole game.';
+    return { banner, body, resultRows };
+  }
+
+  function render() {
+    // hidden: a small round button where the panel was, visible on 82-0's dark page; tap it to bring the panel back
+    if (mode === 'off') { compute(); P.style.cssText = `position:fixed;z-index:99999;${where()};width:30px;height:30px;border-radius:50%;background:#f59e0b;border:2px solid #fff;opacity:.75;cursor:pointer;touch-action:none;box-shadow:0 2px 8px rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;font:800 11px/1 system-ui,sans-serif;color:#1a1a1a`; P.innerHTML = '82'; return; }
+    P.style.cssText = CSS_() + ';cursor:pointer';
+    const ctl = `<div style="position:relative;z-index:3;float:right;margin:-2px -3px 2px 6px"><span data-r82="how" style="${BTN}${how ? ';background:rgba(255,255,255,.4)' : ''}" title="How players are valued">?</span><span data-r82="info" style="${BTN}${info ? ';background:rgba(255,255,255,.4)' : ''}" title="Details">i</span><span data-r82="off" style="${BTN}" title="Hide everything">&times;</span></div>`;
+    const { banner, body, resultRows } = compute();
     const all = Object.keys({ ...SITE, ...LOG.squads }).length, onlyLocal = Object.keys(LOG.squads).filter(k => !SITE[k]).length;
     const foot = `<br><small>${all} squads in use (${Object.keys(SITE).length} shared${onlyLocal ? `, ${onlyLocal} new on this device` : ''})${siteNote ? ' &middot; ' + esc(siteNote) : ''}<br>${LOG.games.length} games, ${Object.keys(LOG.squads).length} squads logged &middot; <span data-r82="export" style="text-decoration:underline;cursor:pointer">export log</span>${note ? ' &middot; ' + esc(note) : ''}<br>82-0 overlay ${VERSION} &middot; model from ${MODEL.GAMES} games</small>`;
     const warn = siteNote && /NOT LOADED/.test(siteNote) ? `<small style="color:#ffb74d">${esc(siteNote)}</small>` : '';
