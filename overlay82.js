@@ -9,7 +9,7 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null };
-  const VERSION = 'v39';
+  const VERSION = 'v41';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -43,6 +43,21 @@
   const fits = (p, s) => (p.positions || []).includes(s);
   const squads = () => Object.values({ ...SITE, ...LOG.squads }).filter(q => q.squad?.length);
   const findPlayer = e => { const q = LOG.squads[`${e.team_id}|${e.era}`] || SITE[`${e.team_id}|${e.era}`]; return q?.squad?.find(p => String(p.player_id) === String(e.player_id)) || null; };
+  // Work out which player a pick or lineup entry is. A prime pick names the player's prime stint (a different club,
+  // sometimes a different era) rather than the club on offer, so look in the right places in turn.
+  const resolvePick = (e, cellNow) => {
+    const id = String(e.player_id);
+    const exact = findPlayer(e); if (exact) return exact;
+    const onOffer = (cellNow?.squad || []).find(x => String(x.player_id) === id);
+    if (onOffer?.prime && String(onOffer.prime.team_id) === String(e.team_id)) return { ...onOffer.prime, player_id: onOffer.player_id, name: onOffer.name, positions: onOffer.prime.positions?.length ? onOffer.prime.positions : onOffer.positions };
+    const all = squads();
+    const sameClub = all.flatMap(q => q.squad).filter(x => String(x.player_id) === id && String(x.team_id) === String(e.team_id));
+    if (sameClub.length) return sameClub.sort((a, b) => val(b) - val(a))[0];
+    if (onOffer) return onOffer;
+    const any = all.flatMap(q => q.squad).filter(x => String(x.player_id) === id);
+    if (any.length) return any.sort((a, b) => val(b) - val(a))[0];
+    return { player_id: e.player_id, team_id: e.team_id, era: e.era, name: e.name || `player #${e.player_id}`, positions: e.slot ? [e.slot] : [], stats: {}, unknown: true };
+  };
   let PAR = null, parN = 0;
   const par = () => {   // average best value a random squad offers at each position
     const qs = squads(); if (PAR && parN === qs.length) return PAR;
@@ -255,11 +270,16 @@
     const boosts = [];
     if (top) {
       const offer = (cell.squad || []).filter(p => !used.has(String(p.player_id)));
-      if (bAvail('prime')) for (const p of offer) {           // prime: take a player as his best stint
-        if (!p.prime) continue;
-        const pp = { ...p.prime, player_id: p.player_id, positions: (p.prime.positions && p.prime.positions.length) ? p.prime.positions : p.positions };
-        if (val(pp) <= val(p) + 0.5 || !feasible([...team, pp])) continue;
-        boosts.push({ kind: 'PRIME', p: pp, base: p, v: val(pp), ...simulate(team, { p: pp }, BSIMS) }); }
+      // prime: take a player as his best stint. The game names that stint in the player's "prime" entry; if it's
+      // missing, use his best stint among the known squads instead.
+      const bestStint = bAvail('prime') ? bestStints() : new Map();
+      const primeCands = [];
+      if (bAvail('prime')) for (const p of offer) {
+        const src = p.prime || bestStint.get(String(p.player_id)); if (!src) continue;
+        const pp = { ...src, player_id: p.player_id, positions: (src.positions && src.positions.length) ? src.positions : p.positions };
+        if (val(pp) <= val(p) + 0.5 || val(pp) < top.v || !feasible([...team, pp])) continue;   // only worth it if he'd beat the best normal pick
+        primeCands.push({ kind: 'PRIME', p: pp, base: p, v: val(pp) }); }
+      for (const c of primeCands.sort((a, b) => b.v - a.v).slice(0, 3)) boosts.push({ ...c, ...simulate(team, { p: c.p }, BSIMS) });
       const topOffer = offer.filter(p => feasible([...team, p])).sort((a, b) => val(b) - val(a)).slice(0, 5);
       if (bAvail('double_pick') && team.length <= 3)          // double pick: two players from this list
         for (let i = 0; i < topOffer.length; i++) for (let k = i + 1; k < topOffer.length; k++) {
@@ -399,17 +419,24 @@
     return { banner, body, resultRows };
   }
 
+  // each player's highest-value stint across the known squads (cached until the squad list changes)
+  let BEST = null, bestN = 0;
+  const bestStints = () => { const qs = squads(); if (BEST && bestN === qs.length) return BEST; BEST = new Map(); bestN = qs.length;
+    for (const q of qs) for (const x of q.squad) { const k = String(x.player_id), b = BEST.get(k); if (!b || val(x) > b.v) BEST.set(k, { ...x, team: q.team, v: val(x) }); }
+    return BEST; };
+
   // squads.json format 2 stores each squad as rows and each team once; expand it to the shape the game sends
   function expandSquads(j) {
     if (j.format !== 2) return j.squads;
-    const T = j.teams || {}, team = id => { const t = T[id] || []; return { team_id: id, abbr: t[0], name: t[1], primary_color: t[2], secondary_color: t[3] }; };
+    // teams are keyed "team_id|era": a franchise keeps its id but changes name and abbreviation between eras
+    const T = j.teams || {}, team = (id, era) => { const t = T[id + '|' + era] || []; return { team_id: id, abbr: t[0], name: t[1], primary_color: t[2], secondary_color: t[3] }; };
     const stats = a => ({ ppg: a[0], rpg: a[1], apg: a[2], spg: a[3], bpg: a[4] });
     const out = {};
     for (const [key, rows] of Object.entries(j.squads)) {
       const [teamId, era] = key.split('|');
-      out[key] = { team: team(teamId), era, squad: rows.map(r => {
+      out[key] = { team: team(teamId, era), era, squad: rows.map(r => {
         const p = { player_id: r[0], team_id: teamId, era, name: r[1], positions: r[2] ? r[2].split(',') : [], stats: stats(r.slice(3, 8)) };
-        if (Array.isArray(r[8])) { const q = r[8]; p.prime = { player_id: r[0], team_id: q[0], era: q[1], name: r[1], positions: q[2] ? q[2].split(',') : [], stats: stats(q.slice(3, 8)), team: team(q[0]) }; }
+        if (Array.isArray(r[8])) { const q = r[8]; p.prime = { player_id: r[0], team_id: q[0], era: q[1], name: r[1], positions: q[2] ? q[2].split(',') : [], stats: stats(q.slice(3, 8)), team: team(q[0], q[1]) }; }
         return p; }) };
     }
     return out;
@@ -471,13 +498,13 @@
           if (Array.isArray(lineup) && lineup.length) {
             const byId = new Map(Object.values(picks).map(p => [String(p.player_id), p]));
             const np = {};
-            for (const e of lineup) { const p = byId.get(String(e.player_id)) || findPlayer(e); if (p && e.slot) np[e.slot] = p; }
+            for (const e of lineup) { if (!e || !e.slot) continue; np[e.slot] = byId.get(String(e.player_id)) || resolvePick(e, cell); }
             picks = np;
           }
-          if (act?.type === 'pick_player' && cell) {
-            const p = (cell.squad || []).find(x => String(x.player_id) === String(act.player_id) && String(x.team_id) === String(act.team_id));
-            picks[act.slot] = p || { player_id: act.player_id, name: `#${act.player_id}`, stats: {} };
-          }
+          // any action that places a player counts as a pick (normal, prime, and the two picks of a double pick)
+          const placed = act ? (Array.isArray(act.picks) ? act.picks : Array.isArray(act.players) ? act.players : act.player_id != null && act.slot ? [act] : []) : [];
+          if (placed.length && cell) for (const e of placed) if (e && e.slot && e.player_id != null) picks[e.slot] = resolvePick(e, cell);
+          if (act?.type && act.type !== 'pick_player') LOG.boosterSamples = [...(LOG.boosterSamples || []).slice(-19), { at: new Date().toISOString(), action: act, lineup: body?.lineup || null }];
           const bal = j?.user?.wallet?.balances;
           if (bal && bal.coin != null) { coins = +bal.coin; LOG.lastWallet = { at: new Date().toISOString(), balances: bal }; }
           if (j?.cell) {
