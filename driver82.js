@@ -130,18 +130,21 @@
       || [...document.querySelectorAll('button')].filter(b => !ours(b) && visible(b)).sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top || a.getBoundingClientRect().left - b.getBoundingClientRect().left)[0];
     if (!back) return fail('back button not found for RESTART');
     await click(back, 'back');
-    const quit = button(/^yes,?\s*quit\b/i); if (!quit) return fail('"Yes, Quit" not found');
+    const quit = await waitFor(() => button(/^yes,?\s*quit\b/i), '"Yes, Quit"'); if (!quit) return fail('"Yes, Quit" not found');
     await click(quit, 'Yes, Quit'); await sleep(1200);
     return startClassic();
   }
   async function startClassic() {
-    const classic = byText(/^classic$/i)[0];
-    const plays = byText(/^play$/i);
-    const play = classic ? plays.sort((a, b) => dist(a, classic) - dist(b, classic))[0] : plays[0];
+    const findPlay = () => { const classic = byText(/^classic$/i)[0], plays = byText(/^play$/i);
+      return classic ? plays.sort((a, b) => dist(a, classic) - dist(b, classic))[0] : plays[0]; };
+    const play = await waitFor(findPlay, 'Classic "PLAY"');
     if (!play) return fail('Classic "PLAY" not found');
     await click(play, 'Classic PLAY'); await sleep(1500);
     return true;
   }
+  const waitFor = async (find, what) => { const t = Date.now(), ms = DRY_RUN ? 45000 : 5000;
+    if (DRY_RUN) say(`dry run: do the outlined step yourself; waiting for ${what}`);
+    while (Date.now() - t < ms && !stopped) { const el = find(); if (el) return el; await sleep(250); } return null; };
   const dist = (a, b) => { const r = a.getBoundingClientRect(), q = b.getBoundingClientRect(); return Math.hypot(r.left - q.left, r.top - q.top); };
   async function finishGame() {
     for (let i = 0; i < 6 && !stopped; i++) {      // reward / level-up screens come in some order
