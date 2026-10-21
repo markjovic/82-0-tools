@@ -107,7 +107,7 @@
       || [...document.querySelectorAll('button')].filter(b => !ours(b) && visible(b)).sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top || a.getBoundingClientRect().left - b.getBoundingClientRect().left)[0];
     if (!back) return fail('back button not found for RESTART');
     await click(back, 'back');
-    const quit = button(/^yes,?\s*quit$/i); if (!quit) return fail('"Yes, Quit" not found');
+    const quit = button(/^yes,?\s*quit\b/i); if (!quit) return fail('"Yes, Quit" not found');
     await click(quit, 'Yes, Quit'); await sleep(1200);
     return startClassic();
   }
@@ -122,7 +122,7 @@
   const dist = (a, b) => { const r = a.getBoundingClientRect(), q = b.getBoundingClientRect(); return Math.hypot(r.left - q.left, r.top - q.top); };
   async function finishGame() {
     for (let i = 0; i < 6 && !stopped; i++) {      // reward / level-up screens come in some order
-      const claim = button(/^claim$/i), tap = byText(/tap anywhere/i)[0], again = button(/^draft again$/i);
+      const claim = button(/^claim\b/i), tap = byText(/tap anywhere/i)[0], again = button(/^draft again\b/i);
       if (claim) { await click(claim, 'CLAIM'); continue; }
       if (tap) { await click(tap, 'level-up'); continue; }
       if (again) { await click(again, 'DRAFT AGAIN'); await sleep(1500); return true; }
