@@ -115,6 +115,7 @@
   const MAX_CONSEC_FAILS = 3, MAX_RECOVERIES = 25;
   let needRecover = null, inRecovery = false, consecFails = 0, recoveries = 0, errors = 0;
   const fail = async (msg, critical = false) => {
+    if (stopped && !needRecover && !critical) { persist('note', { msg: 'after pause: ' + msg }); return false; }   // you paused it: not an error
     persist('error', { msg, critical, inRecovery }); persist('stop snapshot', snapshot()); diag();
     if (inRecovery) return false;                                  // the recovery itself reports the outcome
     if (!critical && consecFails < MAX_CONSEC_FAILS && recoveries < MAX_RECOVERIES) {
@@ -143,9 +144,9 @@
     // hard block: never press boosters, re-rolls, sharing, account or ad controls, whatever the logic above decided
     const label = ((el.getAttribute && el.getAttribute('aria-label')) || '') + ' ' + txt(el);
     // (the one exception: a deliberate free/owned re-roll on the final pick in Auto, which passes allowRespin)
-    const blocked = opts.allowCoins ? /double pick|\btrade\b|\bprime\b|booster|share results|sign out|watch|\bx2\b|rewarded/i
-                  : opts.allowRespin ? /double pick|\btrade\b|\bprime\b|booster|share results|sign out|watch|\bx2\b|rewarded|coin balance/i
-                                     : /double pick|\btrade\b|\bprime\b|respin|booster|share results|sign out|watch|\bx2\b|rewarded|coin balance/i;
+    const blocked = opts.allowCoins ? /double pick|\btrade\b|\bprime\b|booster|share results|sign out|watch|\bx2\b|rewarded|profile|settings|leaderboard|challenges|my stats|how to play|get the app|download|edit name|copy user id|socials|menu/i
+                  : opts.allowRespin ? /double pick|\btrade\b|\bprime\b|booster|share results|sign out|watch|\bx2\b|rewarded|profile|settings|leaderboard|challenges|my stats|how to play|get the app|download|edit name|copy user id|socials|menu|coin balance/i
+                                     : /double pick|\btrade\b|\bprime\b|respin|booster|share results|sign out|watch|\bx2\b|rewarded|coin balance|profile|settings|leaderboard|challenges|my stats|how to play|get the app|download|edit name|copy user id|socials|menu/i;
     if (blocked.test(label)) {
       await fail(`refused to click a blocked control: "${label.trim().slice(0, 60)}"`, true); return false; }
     if (DRY_RUN) {   // a magenta frame drawn over the page (not on the element, so nothing can clip it); stays until the next action
@@ -175,6 +176,9 @@
   // A court position: empty ones are a button showing the position; filled ones are a jersey button showing the
   // player's initials, with the position label beside it. Either way, click the button nearest that label.
   const slotEl = s => {
+    // the game labels each court position: "C" when open, "C: Player Name" when filled
+    const byAria = [...document.querySelectorAll('button,[role=button]')].find(b => !ours(b) && visible(b) && new RegExp('^' + s + '(:|$)').test((b.getAttribute('aria-label') || '').trim()));
+    if (byAria) return byAria;
     const lab = court()?.[s]?.[0];
     // fallback: with most positions filled the court may not show every label, but an open position is still a
     // button whose label is the position itself (the filter tabs G/F/C have no such label)
@@ -253,7 +257,9 @@
     // position can't be found by its label, find the jersey by his initials (only if exactly one jersey matches).
     const initials = n => n.split(/\s+/).filter(w => /^[A-Za-z]/.test(w) && !/^(jr|sr|ii|iii|iv)\.?$/i.test(w)).map(w => w[0].toUpperCase());
     const ini = initials(name), want = ini.length > 1 ? ini[0] + ini[ini.length - 1] : ini.join('');
-    const jersey = () => { const m = [...document.querySelectorAll('button,[role=button]')].filter(x => !ours(x) && visible(x) && txt(x).replace(/\s+/g, '') === want); return m.length === 1 ? m[0] : null; };
+    const jersey = () => { const named = [...document.querySelectorAll('button,[role=button]')].find(x => !ours(x) && visible(x) && norm(x.getAttribute('aria-label') || '').endsWith(': ' + norm(name)));
+      if (named) return named;
+      const m = [...document.querySelectorAll('button,[role=button]')].filter(x => !ours(x) && visible(x) && txt(x).replace(/\s+/g, '') === want); return m.length === 1 ? m[0] : null; };
     const a = slotEl(from) || jersey(), b = slotEl(to);
     if (!a || !b) return fail(`court positions ${from}/${to} not found for the move (looked for ${name}'s jersey "${want}" too)`);
     await click(a, `${name}'s jersey at ${from}`); await sleep(700);
@@ -261,6 +267,7 @@
     return true;
   }
   async function restart() {
+    if (onStartScreen()) { say('already on the start screen: starting a new Classic draft'); return startClassic(); }
     const back = byLabel(/^go back$/i);   // only the game's own "Go back" button; never guessed
     if (!back) return fail('back button not found for RESTART');
     await click(back, 'back');
@@ -277,6 +284,16 @@
     if (quit && !DRY_RUN) return fail('"Yes, Quit" was pressed 3 times but the dialog is still open');
     return startClassic();
   }
+  const onStartScreen = () => !/\/draft/.test(location.pathname) && [...document.querySelectorAll('button,[role=button]')].some(b => !ours(b) && visible(b) && /^play$/i.test(txt(b).trim()));
+  // If a click ever lands the page somewhere other than the draft (a profile or menu page), go back to it.
+  async function backToDraft() {
+    if (/\/draft/.test(location.pathname)) return true;
+    if (onStartScreen()) { say('on the start screen: starting a new Classic draft', 'warn'); return startClassic(); }
+    say(`left the draft (now on ${location.pathname}): going back`, 'warn'); persist('left draft', { path: location.pathname });
+    history.back(); await sleep(2000);
+    if (/\/draft/.test(location.pathname)) return true;
+    if (onStartScreen()) return startClassic();
+    return fail(`the page is on ${location.pathname} and going back didn't return to the draft`, true); }
   async function startClassic() {
     // New start screen (Oct 2026): a world carousel with one PLAY button, a PRO BASKETBALL / COLLEGE switch and a
     // CLASSIC / 1 VS 1 / HOOP IQ mode switch, each marking its choice with aria-selected / aria-pressed.
@@ -355,6 +372,7 @@
   while (!stopped && !needRecover && games < gamesEnd && restarts < restartsEnd) {
     const flag = checkRedFlags(); if (flag) { await fail('unexpected prompt: ' + flag, true); break; }
     await whileHidden();
+    if (!/\/draft/.test(location.pathname)) { if (!(await backToDraft())) break; await sleep(1500); continue; }
     const stray = findClaim() || byText(/tap anywhere/i)[0];
     if (stray) { await click(stray, txt(stray).toUpperCase() || 'popup'); if (DRY_RUN) await sleep(2000); continue; }
     const seq = window.r820.seq, next = window.r820.next || 'WAIT', parts = next.split('|');
@@ -456,6 +474,7 @@
     inRecovery = true; recoveries++;
     try {
       await sleep(1500); await whileHidden();
+      if (!/\/draft/.test(location.pathname)) { const ok = await backToDraft(); if (ok) { say('recovered: back in a draft'); return true; } return false; }
       const st = window.r820?.state || {}, kind = (window.r820?.next || '').split('|')[0];
       if (kind === 'RESULT' || kind === 'WAIT') { say('recovered: back on track (' + kind.toLowerCase() + ')'); return true; }
       const open = st.open || [], offer = (st.offer || []).slice().sort((a, b) => b.value - a.value);

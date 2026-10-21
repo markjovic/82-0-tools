@@ -9,7 +9,7 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null };
-  const VERSION = 'v41';
+  const VERSION = 'v42';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -19,8 +19,8 @@
   const MODEL = { ppg: 0.3395, rpg: 0.6158, apg: 0.6149, spg: 1.2753, bpg: 1.3963, NO_DEF: 3.3170, BASE: -3.6824, BPG_BEND: 2.10, BPG_EXTRA: 1.5471, GAMES: 208 };
   // Score to wins: a power curve that matches all 132 games exactly (a straight line missed the 102.7 game).
   // 82 wins needs a score between 119.27 and 119.36 (narrowed by the 112.0 game); the upper end is used.
-  const winsFor = s => Math.max(0, Math.min(82, Math.round(82 * Math.pow(Math.max(0, s) / 119.9, 1.155))));
-  const SCORE_82 = 119.36;
+  const winsFor = s => Math.max(0, Math.min(82, Math.round(82 * Math.pow(Math.max(0, s) / 120.02, 1.1495))));   // refitted on 310 games, 21 Oct
+  const SCORE_82 = 119.41;
   const SIMS = 800;
   const COIN_COST = 100;   // coins per re-roll once free / owned ones are used (as the game shows it)
   let coins = null;        // coin balance, read from the user record the game sends with each reply
