@@ -140,7 +140,10 @@
   // A court position: empty ones are a button showing the position; filled ones are a jersey button showing the
   // player's initials, with the position label beside it. Either way, click the button nearest that label.
   const slotEl = s => {
-    const lab = court()?.[s]?.[0]; if (!lab) return null;
+    const lab = court()?.[s]?.[0];
+    // fallback: with most positions filled the court may not show every label, but an open position is still a
+    // button whose label is the position itself (the filter tabs G/F/C have no such label)
+    if (!lab) return [...document.querySelectorAll('button,[role=button]')].find(b => !ours(b) && visible(b) && (b.getAttribute('aria-label') || '').trim() === s) || null;
     const own = lab.closest('button,[role=button]'); if (own && !ours(own)) return own;
     const r = lab.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
     const near = [...document.querySelectorAll('button,[role=button]')].filter(b => !ours(b) && visible(b))
@@ -149,6 +152,12 @@
     return near && near[0] < 120 ? near[1] : lab; };
   const searchBox = () => [...document.querySelectorAll('input')].find(i => !ours(i) && visible(i) && /search/i.test(i.placeholder || i.getAttribute('aria-label') || ''));
   const button = re => byText(re).sort((a, b) => txt(a).length - txt(b).length)[0] || null;
+  // A player's name element can contain an icon (a badge or star) as well as the text, so it isn't always a "leaf".
+  // Match any element whose whole text is the name, keeping the innermost one.
+  const norm = t => t.normalize('NFC').replace(/\s+/g, ' ').trim().toLowerCase();
+  const byName = name => { const want = norm(name);
+    const hits = [...document.body.querySelectorAll('*')].filter(el => !ours(el) && visible(el) && norm(txt(el)) === want);
+    return hits.filter(el => !hits.some(o => o !== el && el.contains(o))); };
   const byLabel = re => [...document.querySelectorAll('button,[role=button],a')].find(b => !ours(b) && visible(b) && re.test(b.getAttribute('aria-label') || '')) || null;
   // the court view hides the player list; this button brings it back (and with it the search box)
   const showList = async () => { const b = byLabel(/show the player list/i); if (b) { await click(b, 'show player list'); await sleep(500); return true; } return false; };
@@ -188,7 +197,7 @@
       }
       const sb = searchBox();
       if (sb) await typeInto(sb, name);
-      cand = byText(re);
+      cand = byName(name);
       if (!cand.length) await sleep(900);   // the list may still be filtering / animating
     }
     if (!cand.length) return fail(`player "${name}" not found in the list`);
@@ -209,8 +218,7 @@
     return true;
   }
   async function restart() {
-    const back = byLabel(/^go back$/i) || [...document.querySelectorAll('button,[role=button],a')].find(b => !ours(b) && visible(b) && (/back/i.test(b.getAttribute('aria-label') || '') || /^[‹<←]$/.test(txt(b))))
-      || [...document.querySelectorAll('button')].filter(b => !ours(b) && visible(b)).sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top || a.getBoundingClientRect().left - b.getBoundingClientRect().left)[0];
+    const back = byLabel(/^go back$/i);   // only the game's own "Go back" button; never guessed
     if (!back) return fail('back button not found for RESTART');
     await click(back, 'back');
     // the quit dialog animates in: let it settle before pressing, and press again if it's still there
