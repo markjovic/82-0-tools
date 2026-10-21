@@ -58,12 +58,28 @@
         if (SLOTS.every(s => map[s]?.length === 1)) return map; break; }
     return null;
   };
-  const slotEl = s => court()?.[s]?.[0] || null;
+  // A court position: empty ones are a button showing the position; filled ones are a jersey button showing the
+  // player's initials, with the position label beside it. Either way, click the button nearest that label.
+  const slotEl = s => {
+    const lab = court()?.[s]?.[0]; if (!lab) return null;
+    const own = lab.closest('button,[role=button]'); if (own && !ours(own)) return own;
+    const r = lab.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    const near = [...document.querySelectorAll('button,[role=button]')].filter(b => !ours(b) && visible(b))
+      .map(b => { const q = b.getBoundingClientRect(); return [Math.hypot(q.left + q.width / 2 - cx, q.top + q.height / 2 - cy), b]; })
+      .sort((a, b) => a[0] - b[0])[0];
+    return near && near[0] < 120 ? near[1] : lab; };
   const searchBox = () => [...document.querySelectorAll('input')].find(i => !ours(i) && visible(i) && /search/i.test(i.placeholder || i.getAttribute('aria-label') || ''));
   const button = re => byText(re).sort((a, b) => txt(a).length - txt(b).length)[0] || null;
   const byLabel = re => [...document.querySelectorAll('button,[role=button],a')].find(b => !ours(b) && visible(b) && re.test(b.getAttribute('aria-label') || '')) || null;
   // the court view hides the player list; this button brings it back (and with it the search box)
   const showList = async () => { const b = byLabel(/show the player list/i); if (b) { await click(b, 'show player list'); await sleep(500); return true; } return false; };
+  // moves happen on the court, which the open player list covers: close the list first
+  const showCourt = async () => {
+    if (!searchBox()) return true;
+    const b = byLabel(/hide the player list|close the player list|show the court|collapse/i)
+      || [...document.querySelectorAll('button,[role=button]')].find(x => !ours(x) && visible(x) && /player list|court/i.test(x.getAttribute('aria-label') || '') && !/show the player list/i.test(x.getAttribute('aria-label') || ''));
+    if (!b) return false;
+    await click(b, 'show court'); await sleep(600); return !searchBox() || true; };
 
   // anything we must never interact with or that needs a human
   const RED_FLAGS = /captcha|verify you are human|are you a robot|purchase|buy now|watch (an )?ad|subscribe|sign in to|log in to|something went wrong|too many requests/i;
@@ -98,8 +114,10 @@
   async function movePlayer(name, to) {
     const from = window.r820?.state?.picked?.find(p => p.name === name)?.slot;
     if (!from) return fail(`can't tell where ${name} is to move him`);
+    if (!(await showCourt())) return fail(`the player list is covering the court and no button to close it was found (move ${name} ${from} → ${to})`);
     const a = slotEl(from), b = slotEl(to); if (!a || !b) return fail(`court positions ${from}/${to} not found for the move`);
-    await click(a, `${name} at ${from}`); await sleep(500); await click(b, `${to} for ${name}`);
+    await click(a, `${name}'s jersey at ${from}`); await sleep(700);
+    const b2 = slotEl(to) || b; await click(b2, `${to} for ${name}`); await sleep(500);
     return true;
   }
   async function restart() {
