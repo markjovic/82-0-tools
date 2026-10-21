@@ -19,6 +19,9 @@
   // Wilt hunt: once a draft has 2 S-grade picks it is kept and played to the end on the overlay's advice (for the
   // coins), still pausing if the #1 C turns up. sPicks counts S-grade picks in the current draft.
   const KEEP_AFTER_S = 2;
+  // Auto plays every draft to the end instead of quitting weak ones: quitting has twice reloaded the whole page
+  // (which stops the driver), and a full game still earns coins and adds data. The Wilt hunt still quits.
+  const AUTO_QUITS = false;
   const HUNT_TOP_C = 2;   // pause when a C ranked this high or better is on offer: #1 and #2 are both Wilt (SFW and PHI 1960s)
   let sPicks = 0;
   const GAP_MS     = 700;    // pause between actions (human pace; don't go much lower)
@@ -325,6 +328,15 @@
       continue;
       }
     }
+    if (kind === 'RESTART' && MODE === 'advice' && !AUTO_QUITS) {
+      const o = window.r820?.state?.otherwise;
+      if (!o) { await fail('overlay advised a restart without a pick to fall back on (overlay v36+ needed)'); break; }
+      say(`weak first spin: playing it out anyway, take ${o.name} → ${o.slot}`);
+      if (!(await pickPlayer(o.name, o.slot))) break;
+      if (!(await spin(false))) { await fail('placed the player but found no SPIN button to send the pick'); break; }
+      if (!(await waitSeq(seq))) { await fail(`pick of ${o.name} → ${o.slot} did not register`); break; }
+      picks++; continue;
+    }
     if (kind === 'RESTART') { restarts++; sPicks = 0; say('restart (weak first spin)'); if (!(await restart())) break; await waitSeq(seq, 6000); continue; }
     // TAKE, MOVE...|TAKE, or REROLL_* (never re-roll: take the "otherwise" pick)
     // Auto mode, final pick: if the overlay recommends a re-roll and it's free, owned or bought with coins, use it.
@@ -376,6 +388,6 @@
   if (!stopped) say(`batch done (${games >= gamesEnd ? MAX_GAMES + ' games' : MAX_RESTARTS + ' restarts'}): ${games} games, ${picks} picks, ${restarts} restarts so far. Press Resume for another batch.`);
   looping = false; say(log[log.length - 1].slice(9), lastTone);   // redraw with a Resume button, same colour
   }
-  if (!window.r820 || !/^v(\d+)/.test(window.r820.version || '') || +window.r820.version.slice(1) < 32) return fail('overlay v32+ not loaded (run r820 first)');
+  if (!window.r820 || !/^v(\d+)/.test(window.r820.version || '') || +window.r820.version.slice(1) < 36) return fail('overlay v36+ not loaded (reload the page and run r820)');
   runLoop();
 })();

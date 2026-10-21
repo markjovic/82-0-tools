@@ -9,14 +9,14 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null };
-  const VERSION = 'v35';
+  const VERSION = 'v37';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
-  // Refitted 21 Oct 2026 from 139 games. Team blocks have a bend: below BPG_BEND team blocks, each block is worth
-  // BPG_EXTRA more (low-block teams are penalised harder). Leave-one-out error 0.37 (was 0.49 without the bend).: team score = sum of player values + BASE.
+  // Refitted 21 Oct 2026 from all 208 logged games. Team blocks have a bend: below BPG_BEND team blocks, each block is worth
+  // BPG_EXTRA more (low-block teams are penalised harder). Leave-one-out error 0.38 (0.49 without the bend).: team score = sum of player values + BASE.
   // A player with no steals/blocks on record (1960s, early 1970s) gets NO_DEF instead.
-  const MODEL = { ppg: 0.3360, rpg: 0.6157, apg: 0.6155, spg: 1.2727, bpg: 1.3697, NO_DEF: 3.3117, BASE: -3.3875, BPG_BEND: 2.10, BPG_EXTRA: 1.6617, GAMES: 139 };
+  const MODEL = { ppg: 0.3395, rpg: 0.6158, apg: 0.6149, spg: 1.2753, bpg: 1.3963, NO_DEF: 3.3170, BASE: -3.6824, BPG_BEND: 2.10, BPG_EXTRA: 1.5471, GAMES: 208 };
   // Score to wins: a power curve that matches all 132 games exactly (a straight line missed the 102.7 game).
   // 82 wins needs a score between 119.27 and 119.36 (narrowed by the 112.0 game); the upper end is used.
   const winsFor = s => Math.max(0, Math.min(82, Math.round(82 * Math.pow(Math.max(0, s) / 119.9, 1.155))));
@@ -289,7 +289,7 @@
     // machine-readable instruction (same decision as the top bar)
     let act;
     if (!top) act = { type: 'NONE' };
-    else if (restart) act = { type: 'RESTART' };
+    else if (restart) { const pl = placement(top); act = { type: 'RESTART', otherwise: { name: top.p.name, slot: pl.slot, moves: pl.movesRaw || [] } }; }
     else { const pl = placement(top);
       const take = { name: top.p.name, slot: pl.slot, moves: pl.movesRaw || [] };
       act = better ? { type: better.name === 'Era' ? 'REROLL_ERA' : 'REROLL_TEAM', otherwise: take, cost: better.cost.replace(/^ \(|\)$/g, '') || 'free' } : { type: 'TAKE', ...take }; }
