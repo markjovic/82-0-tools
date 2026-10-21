@@ -90,6 +90,20 @@
     await click(hide, 'hide player list'); await sleep(600);
     if (DRY_RUN) { await waitFor(() => !byLabel(/hide the player list/i) || null, 'the list to close'); }
     return true; };
+  // anything we must never interact with or that needs a human
+  const RED_FLAGS = /captcha|verify you are human|are you a robot|purchase|buy now|watch (an )?ad|subscribe|sign in to|log in to|something went wrong|too many requests/i;
+  const checkRedFlags = () => { const dlg = [...document.querySelectorAll('[role=dialog],[aria-modal=true]')].filter(d => !ours(d) && visible(d)).map(txt).join(' ');
+    return RED_FLAGS.test(dlg) ? dlg.slice(0, 160) : null; };
+
+  const diag = () => { const btns = [...document.querySelectorAll('button,[role=button],a')].filter(b => !ours(b) && visible(b)).map(b => (txt(b) || b.getAttribute('aria-label') || b.className || '?').slice(0, 30));
+    const labels = [...document.querySelectorAll('button,[role=button]')].filter(b => !ours(b) && visible(b) && b.getAttribute('aria-label')).map(b => b.getAttribute('aria-label'));
+    console.log('[82-0 driver] button labels:', labels);
+    console.log('[82-0 driver] visible buttons:', btns, '| overlay next:', window.r820?.next, '| state:', window.r820?.state, '| court found:', !!court(), '| search box:', !!searchBox()); };
+
+  // wait for the overlay to publish new advice (proves the last action registered)
+  const waitSeq = async (from, ms = SEQ_WAIT) => { const t = Date.now(); while (Date.now() - t < ms) { if (stopped) return false; if (window.r820?.seq !== from) { await sleep(150); return true; } await sleep(120); } return false; };
+
+  // ---------- actions ----------
   async function pickPlayer(name, slot) {
     const re = new RegExp('^' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$');
     let cand = [];
