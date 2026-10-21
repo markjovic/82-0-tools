@@ -108,7 +108,8 @@
     // hard block: never press boosters, re-rolls, sharing, account or ad controls, whatever the logic above decided
     const label = ((el.getAttribute && el.getAttribute('aria-label')) || '') + ' ' + txt(el);
     // (the one exception: a deliberate free/owned re-roll on the final pick in Auto, which passes allowRespin)
-    const blocked = opts.allowRespin ? /double pick|\btrade\b|\bprime\b|booster|share results|sign out|watch|\bx2\b|rewarded|coin balance/i
+    const blocked = opts.allowCoins ? /double pick|\btrade\b|\bprime\b|booster|share results|sign out|watch|\bx2\b|rewarded/i
+                  : opts.allowRespin ? /double pick|\btrade\b|\bprime\b|booster|share results|sign out|watch|\bx2\b|rewarded|coin balance/i
                                      : /double pick|\btrade\b|\bprime\b|respin|booster|share results|sign out|watch|\bx2\b|rewarded|coin balance/i;
     if (blocked.test(label)) {
       await fail(`refused to click a blocked control: "${label.trim().slice(0, 60)}"`); return false; }
@@ -327,6 +328,18 @@
         if (btn && !/\(0 left\)/i.test(btn.getAttribute('aria-label') || '')) {
           say(`final pick: using the ${scope} re-roll (${cost})`);
           await click(btn, `re-roll ${scope}`, { allowRespin: true });
+          // a coin re-roll asks "spend 100 coins?" first: press its confirm button (never a cancel, close or ad option)
+          if (/coins/i.test(cost)) {
+            const confirmBtn = await waitFor(() => {
+              const scopeEls = [...document.querySelectorAll('[role=dialog],[aria-modal=true]')].filter(d => !ours(d) && visible(d));
+              const pool = (scopeEls.length ? scopeEls.flatMap(d => [...d.querySelectorAll('button,[role=button]')]) : [...document.querySelectorAll('button,[role=button]')])
+                .filter(b => !ours(b) && visible(b));
+              const ok = pool.filter(b => { const t = (txt(b) + ' ' + (b.getAttribute('aria-label') || '')).trim();
+                return /confirm|yes|spend|\buse\b|re-?roll|respin|continue|\bok\b|\b100\b/i.test(t) && !/cancel|\bno\b|close|not now|watch|\bad\b|video|free/i.test(t); });
+              return scopeEls.length ? ok[0] || null : ok.find(b => /spend|confirm|\b100\b/i.test(txt(b))) || null; }, 'the "spend coins" confirmation');
+            if (!confirmBtn) { await fail(`clicked the ${scope} re-roll but couldn't find the "spend coins" confirm button`); break; }
+            await click(confirmBtn, `confirm coin re-roll: "${txt(confirmBtn).replace(/\s+/g, ' ').slice(0, 30)}"`, { allowRespin: true, allowCoins: true });
+          }
           if (!(await waitSeq(seq))) { await fail(`the ${scope} re-roll did not register`); break; }
           rerollsUsed++; continue;
         }
