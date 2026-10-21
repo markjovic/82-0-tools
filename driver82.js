@@ -15,6 +15,14 @@
 
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const sleep = ms => new Promise(r => setTimeout(r, ms));
+  // When the tab is hidden or fully covered by another window, the browser freezes the game's animations and slows
+  // timers, so nothing the driver waits for can happen. Pause until the page is visible again instead of failing.
+  const hidden = () => document.visibilityState === 'hidden';
+  const whileHidden = async () => { if (!hidden()) return false;
+    say('paused: the game tab is hidden or covered; resumes when it\'s visible');
+    while (hidden() && !stopped) await sleep(500);
+    if (!stopped) { say('resumed'); await sleep(1500); }   // let the game catch up on its animations
+    return true; };
   let stopped = false, games = 0, picks = 0, restarts = 0, skippedRerolls = 0;
   const marker = document.createElement('div'); document.body.append(marker);
   const log = [];
@@ -101,13 +109,17 @@
     console.log('[82-0 driver] visible buttons:', btns, '| overlay next:', window.r820?.next, '| state:', window.r820?.state, '| court found:', !!court(), '| search box:', !!searchBox()); };
 
   // wait for the overlay to publish new advice (proves the last action registered)
-  const waitSeq = async (from, ms = SEQ_WAIT) => { const t = Date.now(); while (Date.now() - t < ms) { if (stopped) return false; if (window.r820?.seq !== from) { await sleep(150); return true; } await sleep(120); } return false; };
+  const waitSeq = async (from, ms = SEQ_WAIT) => { let t = Date.now(); while (Date.now() - t < ms) { if (stopped) return false;
+    if (window.r820?.seq !== from) { await sleep(150); return true; }
+    if (await whileHidden()) t = Date.now();   // restart the clock after a pause
+    await sleep(120); } return false; };
 
   // ---------- actions ----------
   async function pickPlayer(name, slot) {
     const re = new RegExp('^' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$');
     let cand = [];
-    for (let attempt = 0; attempt < 3 && !cand.length && !stopped; attempt++) {
+    for (let attempt = 0; attempt < 5 && !cand.length && !stopped; attempt++) {
+      if (await whileHidden()) attempt = 0;
       if (byLabel(/show the player list/i)) {   // list closed (e.g. after a move): open it
         await showList();
         if (DRY_RUN) await waitFor(() => !byLabel(/show the player list/i) || null, 'the list to open');
@@ -177,7 +189,7 @@
   }
   const waitFor = async (find, what) => { const t = Date.now(), ms = DRY_RUN ? 45000 : 5000;
     if (DRY_RUN) say(`dry run: do the outlined step yourself; waiting for ${what}`);
-    while (Date.now() - t < ms && !stopped) { const el = find(); if (el) return el; await sleep(250); } return null; };
+    let t0 = t; while (Date.now() - t0 < ms && !stopped) { const el = find(); if (el) return el; if (await whileHidden()) t0 = Date.now(); await sleep(250); } return null; };
   const dist = (a, b) => { const r = a.getBoundingClientRect(), q = b.getBoundingClientRect(); return Math.hypot(r.left - q.left, r.top - q.top); };
   const findClaim = () => byText(/^claim\b/i).filter(el => !/x2|double|watch|\bad\b|video/i.test(txt(el.closest('button,[role=button]') || el))).sort((a, b) => txt(a).length - txt(b).length)[0] || null;
   async function finishGame() {
@@ -206,6 +218,7 @@
   let lastResultSeen = null, idle = 0;
   while (!stopped && games < MAX_GAMES) {
     const flag = checkRedFlags(); if (flag) { await fail('unexpected prompt: ' + flag); break; }
+    await whileHidden();
     const stray = findClaim() || byText(/tap anywhere/i)[0];
     if (stray) { await click(stray, txt(stray).toUpperCase() || 'popup'); if (DRY_RUN) await sleep(2000); continue; }
     const seq = window.r820.seq, next = window.r820.next || 'WAIT', parts = next.split('|');
