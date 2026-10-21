@@ -9,7 +9,7 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null };
-  const VERSION = 'v37';
+  const VERSION = 'v39';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -102,6 +102,10 @@
       const add = sq => { const b = bestAdd(sq, t, u); if (!b) return false; t.push(b.p); u.add(String(b.p.player_id)); sum += b.v; return true; };
       let ok;
       if (first.p) { t.push(first.p); u.add(String(first.p.player_id)); sum += val(first.p); ok = true; }
+      else if (first.pair) { for (const q of first.pair) { t.push(q); u.add(String(q.player_id)); } ok = true; }
+      else if (first.trade) {   // swap a drafted player out for one on this list, then still make this round's pick
+        const i = t.findIndex(q => String(q.player_id) === String(first.trade.out.player_id)); if (i >= 0) t.splice(i, 1);
+        t.push(first.trade.in); u.add(String(first.trade.in.player_id)); ok = add(first.trade.squad) || t.length >= 5; }
       else ok = first.pool.length ? add(rnd(first.pool).squad) : false;
       let guard = 0;
       while (ok && t.length < 5 && guard++ < 60) add(rnd(qs).squad);
@@ -243,6 +247,33 @@
     const out = reach !== null && reach < SCORE_82;
     const better = rr.filter(r => top && r.p82 - top.p82 >= 0.03).sort((a, b) => (b.p82 - a.p82) || (b.avg - a.avg))[0];
 
+    // Boosters (prime, trade, double pick) are rare (earned on level-up), so they are only recommended when they
+    // lift the 82-0 chance by at least BOOST_GAIN and leave it at BOOST_MIN or better.
+    const BOOST_GAIN = 0.10, BOOST_MIN = 0.15, BSIMS = 400;
+    const bAvail = key => { const b = cell.boosters?.[key];
+      return !!(b && b.enabled !== false && b.next_use && b.next_use !== 'none' && ((+b.owned_left || 0) > 0 || (+b.remaining || 0) > 0 || (+b.free_left || 0) > 0) && (+b.used_in_draft || 0) < (+b.max_per_draft || Infinity)); };
+    const boosts = [];
+    if (top) {
+      const offer = (cell.squad || []).filter(p => !used.has(String(p.player_id)));
+      if (bAvail('prime')) for (const p of offer) {           // prime: take a player as his best stint
+        if (!p.prime) continue;
+        const pp = { ...p.prime, player_id: p.player_id, positions: (p.prime.positions && p.prime.positions.length) ? p.prime.positions : p.positions };
+        if (val(pp) <= val(p) + 0.5 || !feasible([...team, pp])) continue;
+        boosts.push({ kind: 'PRIME', p: pp, base: p, v: val(pp), ...simulate(team, { p: pp }, BSIMS) }); }
+      const topOffer = offer.filter(p => feasible([...team, p])).sort((a, b) => val(b) - val(a)).slice(0, 5);
+      if (bAvail('double_pick') && team.length <= 3)          // double pick: two players from this list
+        for (let i = 0; i < topOffer.length; i++) for (let k = i + 1; k < topOffer.length; k++) {
+          const pair = [topOffer[i], topOffer[k]]; if (!feasible([...team, ...pair])) continue;
+          boosts.push({ kind: 'DOUBLE', pair, ...simulate(team, { pair }, BSIMS) }); }
+      if (bAvail('trade') && team.length)                     // trade: swap a drafted player for one on this list
+        for (const inP of topOffer.slice(0, 4)) for (const outP of team) {
+          if (val(inP) <= val(outP) + 1) continue;
+          const after = [...team.filter(q => q !== outP), inP]; if (!feasible(after)) continue;
+          boosts.push({ kind: 'TRADE', in: inP, out: outP, ...simulate(team, { trade: { in: inP, out: outP, squad: offer.filter(q => q !== inP) } }, BSIMS) }); }
+    }
+    const bestBoost = boosts.sort((a, b) => b.p82 - a.p82 || b.avg - a.avg)[0];
+    const useBoost = bestBoost && top && bestBoost.p82 - Math.max(top.p82, better ? better.p82 : 0) >= BOOST_GAIN && bestBoost.p82 >= BOOST_MIN ? bestBoost : null;
+
     // TOP BAR = what to do. Its colour rates the pick for its position: green = 82-0 calibre, blue = solid, amber = weak.
     // Re-roll advice uses the game's own button colours (orange team, purple era); RESTART is red.
     const bar = (bg, fg, head, sub) => `<div style="position:relative;background:${bg};color:${fg};border-radius:6px;padding:8px 34px 8px 10px;margin:-2px -3px 6px">${head}${sub ? `<div style="font:600 12px/1.35 system-ui,sans-serif;margin-top:3px">${sub}</div>` : ''}</div>`;
@@ -259,13 +290,22 @@
     const restart = team.length === 0 && top && !['S', 'A+', 'A'].includes(tier(top)[1]);
     if (!top) top_ = bar('#546e7a', '#fff', big('NOTHING TO PICK'), 'No player here can join your team in any arrangement.');
     else if (restart) top_ = bar('#991b1b', '#fff', big('RESTART THE GAME'), `Best here is ${esc(top.p.name)} &rarr; ${placement(top).slot}, ${top.v.toFixed(1)} (${tier(top)[1]}). A first pick outside the top 50 at his position leaves no realistic path.`);
+    else if (useBoost) {
+      const slotOf = pl => { const a = assign([...team, ...(pl.pair || [pl])], cur) || {}; return q => SLOTS.find(sl => a[sl] === q); };
+      let head, sub;
+      if (useBoost.kind === 'PRIME') { const sl = placement({ p: useBoost.p }).slot;
+        head = `PRIME: ${esc(useBoost.p.name)} &rarr; ${sl}`; sub = `Take him as his ${esc(useBoost.p.team?.abbr || '')} ${esc(useBoost.p.era || '')} stint: value ${val(useBoost.base).toFixed(1)} &rarr; ${useBoost.v.toFixed(1)}.`; }
+      else if (useBoost.kind === 'DOUBLE') { const f = slotOf({ pair: useBoost.pair });
+        head = `DOUBLE PICK: ${esc(useBoost.pair[0].name)} &rarr; ${f(useBoost.pair[0])}, ${esc(useBoost.pair[1].name)} &rarr; ${f(useBoost.pair[1])}`; sub = 'Take both from this list.'; }
+      else { head = `TRADE: ${esc(useBoost.out.name)} out, ${esc(useBoost.in.name)} in`; sub = `Then make this round's pick as normal.`; }
+      top_ = bar('#be185d', '#fff', big(head), `${sub} 82-0 chance ${pct(top.p82)} &rarr; ${pct(useBoost.p82)} (projected ${rec(useBoost.avg)}). Uses a ${useBoost.kind === 'DOUBLE' ? 'double pick' : useBoost.kind.toLowerCase()} booster. Otherwise take ${esc(top.p.name)} &rarr; ${placement(top).slot}.`); }
     else if (better) { const era = better.name === 'Era';
       top_ = bar(era ? '#7c3aed' : '#f59e0b', era ? '#fff' : '#1a1a1a', big(`RE-ROLL ${better.name.toUpperCase()}`),
         `${better.known ? better.cost.replace(/^ \(|\)$/g, '') || 'Free re-roll available' : 'If you still have it'}. 82-0 chance ${pct(top.p82)} &rarr; ${pct(better.p82)}. Otherwise take ${esc(top.p.name)} &rarr; ${placement(top).slot}.`); }
     else top_ = pickBar(top);
 
     // OUTLOOK bar, below. Gold = a real 82-0 chance (1%+). Otherwise coloured by the projected record's grade.
-    const chosen = better || top;
+    const chosen = useBoost || better || top;
     let oddsHtml = '';
     if (chosen && !restart) {
       const w = winsFor(chosen.avg), g = gradeOf(w);
@@ -283,6 +323,8 @@
     let h = `Picked: ${team.length ? SLOTS.filter(sl => picks[sl]).map(sl => `${sl} ${esc(picks[sl].name)} ${val(picks[sl]).toFixed(1)}`).join(', ') : 'none yet'}`;
     if (!rerollOK) h += `<br><small>Re-roll advice: ${team.length < 3 ? `only after 3 players are picked (${team.length} so far)` : '82-0 is no longer reachable with this team, so a re-roll would be wasted'}.</small>`;
     for (const r of rr) h += `<br>&nbsp; <span style="color:${r.name === 'Era' ? '#c4b5fd' : '#fcd34d'}">${r.name} re-roll</span>: <b>${pct(r.p82)}</b>, ${rec(r.avg)} <small>(${r.n} squads seen)</small>`;
+    if (boosts.length) { const bb = boosts.slice(0, 3).map(b => `${b.kind === 'DOUBLE' ? 'double pick ' + b.pair.map(q => esc(q.name)).join(' + ') : b.kind === 'TRADE' ? 'trade ' + esc(b.out.name) + ' for ' + esc(b.in.name) : 'prime ' + esc(b.p.name)}: ${pct(b.p82)}`).join('; ');
+      h += `<br><small style="color:#f9a8d4">Boosters: ${bb}${useBoost ? '' : ' (not enough gain to use one)'}</small>`; }
     if (coins != null) h += `<br><small>Coins: ${coins} (${Math.floor(coins / COIN_COST)} re-roll${Math.floor(coins / COIN_COST) === 1 ? '' : 's'} at ${COIN_COST})</small>`;
     const none = ['team', 'era'].filter(k => avail(k) === false).map(k => k === 'team' ? 'Team' : 'Era');
     if (none.length) h += `<br><small>${none.length === 2 ? 'No re-rolls left' : none[0] + ' re-roll: none left'}${cell.boosters ? ' (per the game)' : ''}.</small>`;
@@ -292,10 +334,11 @@
     else if (restart) { const pl = placement(top); act = { type: 'RESTART', otherwise: { name: top.p.name, slot: pl.slot, moves: pl.movesRaw || [] } }; }
     else { const pl = placement(top);
       const take = { name: top.p.name, slot: pl.slot, moves: pl.movesRaw || [] };
-      act = better ? { type: better.name === 'Era' ? 'REROLL_ERA' : 'REROLL_TEAM', otherwise: take, cost: better.cost.replace(/^ \(|\)$/g, '') || 'free' } : { type: 'TAKE', ...take }; }
+      act = useBoost ? { type: 'BOOST_' + useBoost.kind, otherwise: take, booster: useBoost.kind }
+          : better ? { type: better.name === 'Era' ? 'REROLL_ERA' : 'REROLL_TEAM', otherwise: take, cost: better.cost.replace(/^ \(|\)$/g, '') || 'free' } : { type: 'TAKE', ...take }; }
     const t = act.type === 'TAKE' ? act : act.otherwise;
     const takeStr = t ? `${t.moves.length ? 'MOVE|' + t.moves.map(m => `${m.name}>${m.to}`).join('|') + '|' : ''}TAKE|${t.name}|${t.slot}` : '';
-    act.next = act.type === 'TAKE' ? takeStr : act.type.startsWith('REROLL') ? `${act.type}|${t.name}|${t.slot}` : act.type;
+    act.next = act.type === 'TAKE' ? takeStr : (act.type.startsWith('REROLL') || act.type.startsWith('BOOST')) ? `${act.type}|${t.name}|${t.slot}` : act.type;
     act.open = SLOTS.filter(sl => !picks[sl]); act.p82 = (better || top)?.p82 ?? null; act.projected = top ? rec((better || top).avg) : null;
     cache = { sig, banner: top_ + oddsHtml, opts: restart ? '' : opts, h, rec: top, act };
     return cache;
@@ -354,6 +397,22 @@
     } else publish('WAIT', { type: 'WAIT' });
     if (!result && !cell) body = 'Waiting for the next spin or pick. Run this before your first spin so it can follow the whole game.';
     return { banner, body, resultRows };
+  }
+
+  // squads.json format 2 stores each squad as rows and each team once; expand it to the shape the game sends
+  function expandSquads(j) {
+    if (j.format !== 2) return j.squads;
+    const T = j.teams || {}, team = id => { const t = T[id] || []; return { team_id: id, abbr: t[0], name: t[1], primary_color: t[2], secondary_color: t[3] }; };
+    const stats = a => ({ ppg: a[0], rpg: a[1], apg: a[2], spg: a[3], bpg: a[4] });
+    const out = {};
+    for (const [key, rows] of Object.entries(j.squads)) {
+      const [teamId, era] = key.split('|');
+      out[key] = { team: team(teamId), era, squad: rows.map(r => {
+        const p = { player_id: r[0], team_id: teamId, era, name: r[1], positions: r[2] ? r[2].split(',') : [], stats: stats(r.slice(3, 8)) };
+        if (Array.isArray(r[8])) { const q = r[8]; p.prime = { player_id: r[0], team_id: q[0], era: q[1], name: r[1], positions: q[2] ? q[2].split(',') : [], stats: stats(q.slice(3, 8)), team: team(q[0]) }; }
+        return p; }) };
+    }
+    return out;
   }
 
   // ---------- auto-driver controls ----------
@@ -441,6 +500,6 @@
   };
   render();
   _fetch(SQUADS_URL, { cache: 'default' }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-    .then(j => { if (!j || typeof j.squads !== 'object') throw new Error('unexpected format'); SITE = j.squads; siteNote = ''; PAR = null; cache.sig = ''; render(); })
+    .then(j => { if (!j || typeof j.squads !== 'object') throw new Error('unexpected format'); SITE = expandSquads(j); siteNote = ''; PAR = null; cache.sig = ''; render(); })
     .catch(e => { siteNote = 'SHARED SQUADS NOT LOADED (' + e.message + '); using this device only'; render(); });
 })();

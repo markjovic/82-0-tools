@@ -62,7 +62,7 @@
   window.r82stop = () => { stopped = true; say('paused by you'); };
   // controls used by the overlay's buttons
   window.r82setMode = m => { MODE = m === 'wilt' ? 'wilt' : 'advice'; finishAfterGame = false; foundWilt = false; };
-  window.r82state = () => ({ running: looping && !stopped, mode: MODE, foundWilt, games, picks, restarts, coinsGained: coinStart == null ? null : coinLast - coinStart });
+  window.r82state = () => ({ running: looping && !stopped, mode: MODE, foundWilt, games, picks, restarts, errors, coinsGained: coinStart == null ? null : coinLast - coinStart });
   window.r82resume = () => { if (looping) return; stopped = false;
     if (games >= gamesEnd) gamesEnd = games + MAX_GAMES;
     if (restarts >= restartsEnd) restartsEnd = restarts + MAX_RESTARTS;
@@ -70,27 +70,59 @@
     runLoop(); };
   window.r82log = log;
 
-  // ---------- status box ----------
+  // ---------- status box (drag to move; − / + to shrink to games and coins; position and size remembered) ----------
   const box = document.createElement('div');
   box.id = 'r82drvbox';
-  box.style.cssText = 'position:fixed;left:6px;top:6px;z-index:100000;background:#111827;color:#fff;font:12px/1.35 system-ui,sans-serif;padding:6px 8px;border-radius:6px;max-width:300px;opacity:.9';
-  document.body.append(box);
+  let boxPos = null, mini = false;
+  try { boxPos = JSON.parse(localStorage.getItem('r82drvpos')); mini = localStorage.getItem('r82drvmini') === '1'; } catch (e) {}
+  const placeBox = () => { const x = boxPos ? Math.max(0, Math.min(boxPos.x, innerWidth - 40)) : 6, y = boxPos ? Math.max(0, Math.min(boxPos.y, innerHeight - 24)) : 6;
+    box.style.left = x + 'px'; box.style.top = y + 'px'; };
+  box.style.cssText = 'position:fixed;z-index:100000;background:#111827;color:#fff;font:12px/1.35 system-ui,sans-serif;padding:6px 8px;border-radius:6px;max-width:300px;opacity:.92;touch-action:none;user-select:none;cursor:move';
+  placeBox(); document.body.append(box);
   const BTN = 'margin:4px 4px 0 0;padding:2px 8px;border-radius:4px;border:0;font:700 11px system-ui,sans-serif;cursor:pointer';
   // coins: the game labels its coin counter "Coin balance N"; the run's gain is the change since the driver started
   const coinNow = () => { for (const el of document.querySelectorAll('[aria-label]')) { const m = /coin balance\s*([\d,]+)/i.exec(el.getAttribute('aria-label') || ''); if (m) return +m[1].replace(/,/g, ''); } return null; };
   let coinStart = null, coinLast = null;
-  const coinText = () => { const c = coinNow(); if (c != null) { coinLast = c; if (coinStart == null) coinStart = c; }
-    return coinStart == null ? 'coins ?' : `coins +${coinLast - coinStart} (now ${coinLast})`; };
-  let lastTone = null;
-  const say = (msg, tone) => { lastTone = tone ?? null; persist('status', { msg: String(msg).replace(/<[^>]+>/g, ' ').slice(0, 300), games, picks, restarts }); log.push(new Date().toISOString().slice(11, 19) + ' ' + msg);
-    box.style.background = tone === 'gold' ? '#a16207' : tone ? '#991b1b' : '#111827';
-    box.innerHTML = `<b>82-0 driver</b> ${MODE === 'wilt' ? '&middot; WILT HUNT' : ''} ${DRY_RUN ? '(DRY RUN)' : ''}<br>games ${games}/${gamesEnd} &middot; picks ${picks} &middot; restarts ${restarts} &middot; ${coinText()}<br>${msg}<br>`
-      + (looping && !stopped ? `<button data-d="pause" style="${BTN}">Pause</button>` : `<button data-d="resume" style="${BTN}">Resume</button>`);
-    console.log('[82-0 driver]', msg); try { window.r82render?.(); } catch (e) {} };
-  box.addEventListener('click', e => { const d = e.target.closest && e.target.closest('[data-d]'); if (!d) return;
-    if (d.dataset.d === 'pause') window.r82stop(); else window.r82resume(); });
+  const coinGain = () => { const c = coinNow(); if (c != null) { coinLast = c; if (coinStart == null) coinStart = c; } return coinStart == null ? null : coinLast - coinStart; };
+  const coinText = () => { const g = coinGain(); return g == null ? 'coins ?' : `coins +${g} (now ${coinLast})`; };
+  let lastTone = null, lastMsg = '';
+  const drawBox = () => {
+    box.style.background = lastTone === 'gold' ? '#a16207' : lastTone === 'warn' ? '#9a3412' : lastTone ? '#991b1b' : '#111827';
+    const g = coinGain();
+    if (mini) { box.style.padding = '3px 6px';
+      box.innerHTML = `<b>82-0</b> ${MODE === 'wilt' ? '&#127919;' : ''} G ${games} &middot; ${g == null ? '?' : '+' + g}c${errors ? ' &middot; err ' + errors : ''}${lastTone && lastTone !== 'warn' ? ' &middot; <b>' + (lastTone === 'gold' ? 'FOUND' : 'STOPPED') + '</b>' : ''} <button data-d="mini" title="Expand" style="${BTN};margin:0 0 0 4px;padding:0 6px">+</button>`;
+      return; }
+    box.style.padding = '6px 8px';
+    box.innerHTML = `<button data-d="mini" title="Shrink" style="${BTN};float:right;margin:0 0 0 6px;padding:0 6px">&minus;</button><b>82-0 driver</b> ${MODE === 'wilt' ? '&middot; WILT HUNT' : ''} ${DRY_RUN ? '(DRY RUN)' : ''}<br>games ${games}/${gamesEnd} &middot; picks ${picks} &middot; restarts ${restarts}${errors ? ` &middot; <b>errors ${errors}</b>` : ''} &middot; ${coinText()}<br>${lastMsg}<br>`
+      + (looping && !stopped ? `<button data-d="pause" style="${BTN}">Pause</button>` : `<button data-d="resume" style="${BTN}">Resume</button>`); };
+  const say = (msg, tone) => { lastTone = tone ?? null; lastMsg = msg; persist('status', { msg: String(msg).replace(/<[^>]+>/g, ' ').slice(0, 300), games, picks, restarts }); log.push(new Date().toISOString().slice(11, 19) + ' ' + msg);
+    drawBox(); console.log('[82-0 driver]', msg); try { window.r82render?.(); } catch (e) {} };
+  // drag: press and move more than 6px; a press that doesn't move is a normal click
+  let drag = null, dragged = false;
+  box.addEventListener('pointerdown', e => { if (e.target.closest && e.target.closest('[data-d]')) return;
+    const r = box.getBoundingClientRect(); drag = { sx: e.clientX, sy: e.clientY, ox: r.left, oy: r.top, moved: false }; box.setPointerCapture?.(e.pointerId); });
+  box.addEventListener('pointermove', e => { if (!drag) return; const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+    if (!drag.moved && Math.hypot(dx, dy) < 6) return; drag.moved = true; boxPos = { x: drag.ox + dx, y: drag.oy + dy }; placeBox(); });
+  box.addEventListener('pointerup', () => { if (drag?.moved) { dragged = true; try { localStorage.setItem('r82drvpos', JSON.stringify(boxPos)); } catch (e) {} } drag = null; });
+  box.addEventListener('click', e => { if (dragged) { dragged = false; return; }
+    const d = e.target.closest && e.target.closest('[data-d]'); if (!d) return;
+    if (d.dataset.d === 'mini') { mini = !mini; try { localStorage.setItem('r82drvmini', mini ? '1' : '0'); } catch (er) {} drawBox(); }
+    else if (d.dataset.d === 'pause') window.r82stop(); else window.r82resume(); });
   let looping = false, foundWilt = false;
-  const fail = async msg => { stopped = true; say('STOPPED: ' + msg + '<br><small>Resume to retry; export log from the overlay to send me the details</small>', true); diag(); persist('stop snapshot', snapshot()); };
+  // Failures: by default the driver logs the error and tries to recover (pick the highest-value player that fits,
+  // or quit and start a new draft). Critical ones (safety prompts, blocked controls, overlay missing) always stop,
+  // and so does a run of failed recoveries.
+  const MAX_CONSEC_FAILS = 3, MAX_RECOVERIES = 25;
+  let needRecover = null, inRecovery = false, consecFails = 0, recoveries = 0, errors = 0;
+  const fail = async (msg, critical = false) => {
+    persist('error', { msg, critical, inRecovery }); persist('stop snapshot', snapshot()); diag();
+    if (inRecovery) return false;                                  // the recovery itself reports the outcome
+    if (!critical && consecFails < MAX_CONSEC_FAILS && recoveries < MAX_RECOVERIES) {
+      errors++; consecFails++; needRecover = msg;
+      say('ERROR: ' + msg + ' (recovering)', 'warn'); return false; }
+    stopped = true;
+    say('STOPPED: ' + msg + (critical ? '' : ` (${consecFails} failed recoveries in a row)`) + '<br><small>Resume to retry; export log from the overlay to send me the details</small>', true);
+    return false; };
   const snapshot = () => { try {
     return { reason: log[log.length - 1], state: window.r820?.state ? { type: window.r820.state.type, open: window.r820.state.open, club: window.r820.state.club, era: window.r820.state.era, picked: window.r820.state.picked } : null,
       labels: [...document.querySelectorAll('button,[role=button]')].filter(b => !ours(b) && visible(b) && b.getAttribute('aria-label')).map(b => b.getAttribute('aria-label')).slice(0, 60),
@@ -115,7 +147,7 @@
                   : opts.allowRespin ? /double pick|\btrade\b|\bprime\b|booster|share results|sign out|watch|\bx2\b|rewarded|coin balance/i
                                      : /double pick|\btrade\b|\bprime\b|respin|booster|share results|sign out|watch|\bx2\b|rewarded|coin balance/i;
     if (blocked.test(label)) {
-      await fail(`refused to click a blocked control: "${label.trim().slice(0, 60)}"`); return false; }
+      await fail(`refused to click a blocked control: "${label.trim().slice(0, 60)}"`, true); return false; }
     if (DRY_RUN) {   // a magenta frame drawn over the page (not on the element, so nothing can clip it); stays until the next action
       const r = el.getBoundingClientRect();
       marker.style.cssText = `position:fixed;z-index:100001;pointer-events:none;border:4px solid magenta;border-radius:6px;box-shadow:0 0 0 3px rgba(255,0,255,.35);left:${r.left - 6}px;top:${r.top - 6}px;width:${r.width + 4}px;height:${r.height + 4}px`;
@@ -215,7 +247,13 @@
     const from = window.r820?.state?.picked?.find(p => p.name === name)?.slot;
     if (!from) return fail(`can't tell where ${name} is to move him`);
     if (!(await showCourt())) return fail(`the player list is covering the court and no button to close it was found (move ${name} ${from} → ${to})`);
-    const a = slotEl(from), b = slotEl(to); if (!a || !b) return fail(`court positions ${from}/${to} not found for the move`);
+    // A filled position shows the player's initials on his jersey and may have no position label, so if the
+    // position can't be found by its label, find the jersey by his initials (only if exactly one jersey matches).
+    const initials = n => n.split(/\s+/).filter(w => /^[A-Za-z]/.test(w) && !/^(jr|sr|ii|iii|iv)\.?$/i.test(w)).map(w => w[0].toUpperCase());
+    const ini = initials(name), want = ini.length > 1 ? ini[0] + ini[ini.length - 1] : ini.join('');
+    const jersey = () => { const m = [...document.querySelectorAll('button,[role=button]')].filter(x => !ours(x) && visible(x) && txt(x).replace(/\s+/g, '') === want); return m.length === 1 ? m[0] : null; };
+    const a = slotEl(from) || jersey(), b = slotEl(to);
+    if (!a || !b) return fail(`court positions ${from}/${to} not found for the move (looked for ${name}'s jersey "${want}" too)`);
     await click(a, `${name}'s jersey at ${from}`); await sleep(700);
     const b2 = slotEl(to) || b; await click(b2, `${to} for ${name}`); await sleep(500);
     return true;
@@ -228,7 +266,9 @@
     const findQuit = () => button(/^yes,?\s*quit\b/i);
     let quit = await waitFor(findQuit, '"Yes, Quit"'); if (!quit) return fail('"Yes, Quit" not found');
     for (let i = 0; i < 3 && quit && !stopped; i++) {
+      if (await whileHidden()) { i = -1; quit = findQuit(); continue; }   // presses made while hidden don't register: retry once visible
       await sleep(600); await click(quit, 'Yes, Quit'); await sleep(900);
+      if (await whileHidden()) i = -1;
       if (DRY_RUN) break;
       quit = findQuit();
     }
@@ -287,10 +327,9 @@
 
   // ---------- main loop (can be paused and resumed) ----------
   let lastResultSeen = null, idle = 0;
-  async function runLoop() {
-  looping = true; say(MODE === 'wilt' ? 'hunting for Wilt (#1 or #2 C)' : 'running');
-  while (!stopped && games < gamesEnd && restarts < restartsEnd) {
-    const flag = checkRedFlags(); if (flag) { await fail('unexpected prompt: ' + flag); break; }
+  async function innerLoop() {
+  while (!stopped && !needRecover && games < gamesEnd && restarts < restartsEnd) {
+    const flag = checkRedFlags(); if (flag) { await fail('unexpected prompt: ' + flag, true); break; }
     await whileHidden();
     const stray = findClaim() || byText(/tap anywhere/i)[0];
     if (stray) { await click(stray, txt(stray).toUpperCase() || 'popup'); if (DRY_RUN) await sleep(2000); continue; }
@@ -323,7 +362,7 @@
       if (!(await pickPlayer(c.name, c.slot))) break;
       if (!(await spin(false))) { await fail('placed the player but found no SPIN button to send the pick'); break; }
       if (!(await waitSeq(seq))) { await fail(`pick of ${c.name} → ${c.slot} did not register`); break; }
-      picks++; sPicks++;
+      picks++; sPicks++; consecFails = 0;
       if (sPicks >= KEEP_AFTER_S) say(`${sPicks} S-grade picks: keeping this draft and finishing it on the overlay's advice`);
       continue;
       }
@@ -335,7 +374,7 @@
       if (!(await pickPlayer(o.name, o.slot))) break;
       if (!(await spin(false))) { await fail('placed the player but found no SPIN button to send the pick'); break; }
       if (!(await waitSeq(seq))) { await fail(`pick of ${o.name} → ${o.slot} did not register`); break; }
-      picks++; continue;
+      picks++; consecFails = 0; continue;
     }
     if (kind === 'RESTART') { restarts++; sPicks = 0; say('restart (weak first spin)'); if (!(await restart())) break; await waitSeq(seq, 6000); continue; }
     // TAKE, MOVE...|TAKE, or REROLL_* (never re-roll: take the "otherwise" pick)
@@ -366,14 +405,16 @@
         say(`final pick: ${scope} re-roll recommended but its button shows none left; taking the other pick`);
       } else say(`final pick: ${scope} re-roll recommended but it ${cost || 'has a cost'}; taking the other pick`);
     }
-    if (kind.startsWith('REROLL')) skippedRerolls++;
-    let i = kind.startsWith('REROLL') ? 1 : 0, ok = true;
-    const take = kind.startsWith('REROLL') ? ['TAKE', parts[1], parts[2]] : null;
+    // re-roll advice not acted on above, and all booster advice (never used by the driver): take the "otherwise" pick
+    const alt = kind.startsWith('REROLL') || kind.startsWith('BOOST');
+    if (alt) skippedRerolls++;
+    let i = alt ? 1 : 0, ok = true;
+    const take = alt ? ['TAKE', parts[1], parts[2]] : null;
     while (ok && !take && parts[i] === 'MOVE') { /* MOVE|a>PF|b>SF|TAKE|... */ i++;
       while (i < parts.length && parts[i] !== 'TAKE') { const [n, to] = parts[i].split('>'); ok = await movePlayer(n, to); i++; } }
     if (!ok) break;
     const [, name, slot] = take || parts.slice(i);
-    say(`${kind.startsWith('REROLL') ? 'skip re-roll, ' : ''}take ${name} → ${slot}`);
+    say(`${kind.startsWith('REROLL') ? 'skip re-roll, ' : kind.startsWith('BOOST') ? 'booster advised (left for you), ' : ''}take ${name} → ${slot}`);
     if (!(await pickPlayer(name, slot))) break;
     // placing is local; the pick is only sent when SPIN (or, after the fifth pick, the finishing button) is pressed
     // ...except the fifth pick: the game sends it and shows the result by itself, with no button to press
@@ -383,11 +424,44 @@
       const s = slotEl(slot); if (s) { say(`retrying ${slot} for ${name}`); await click(s, slot); if (!last) await spin(false); }
       if (!(await waitSeq(seq))) { await fail(`pick of ${name} → ${slot} did not register`); break; }
     }
-    picks++;
+    picks++; consecFails = 0;
   }
+  }
+  // ---------- recovery: fall back to the highest-value player that fits; failing that, quit and start again ----------
+  async function recover(why) {
+    inRecovery = true; recoveries++;
+    try {
+      await sleep(1500); await whileHidden();
+      const st = window.r820?.state || {}, kind = (window.r820?.next || '').split('|')[0];
+      if (kind === 'RESULT' || kind === 'WAIT') { say('recovered: back on track (' + kind.toLowerCase() + ')'); return true; }
+      const open = st.open || [], offer = (st.offer || []).slice().sort((a, b) => b.value - a.value);
+      const seq = window.r820?.seq;
+      for (const p of offer.slice(0, 4)) {
+        const slots = (p.positions || []).filter(x => open.includes(x)).sort((a, b) => ((p.ranks || {})[a] ?? 999) - ((p.ranks || {})[b] ?? 999));
+        if (!slots.length) continue;
+        say(`recovering from "${why}": taking ${p.name} → ${slots[0]} (highest value that fits)`, 'warn');
+        if (!(await pickPlayer(p.name, slots[0]))) continue;
+        const last = (st.picked?.length || 0) >= 4;
+        if (!last) await spin(false);
+        if (await waitSeq(seq)) { picks++; persist('recovered', { how: 'fallback pick', player: p.name, slot: slots[0] }); say(`recovered: took ${p.name} → ${slots[0]}`); return true; }
+      }
+      say(`recovering from "${why}": no fallback pick worked, quitting to start a new draft`, 'warn');
+      if (await restart()) { restarts++; sPicks = 0; await waitSeq(seq, 6000); persist('recovered', { how: 'restart' }); say('recovered: started a new draft'); return true; }
+      return false;
+    } finally { inRecovery = false; }
+  }
+  async function runLoop() {
+    looping = true; say(MODE === 'wilt' ? 'hunting for Wilt (#1 or #2 C)' : 'running');
+    while (true) {
+      needRecover = null;
+      await innerLoop();
+      if (stopped || !needRecover) break;
+      const why = needRecover;
+      if (!(await recover(why))) { consecFails = MAX_CONSEC_FAILS; await fail('could not recover from: ' + why); break; }
+    }
   if (!stopped) say(`batch done (${games >= gamesEnd ? MAX_GAMES + ' games' : MAX_RESTARTS + ' restarts'}): ${games} games, ${picks} picks, ${restarts} restarts so far. Press Resume for another batch.`);
   looping = false; say(log[log.length - 1].slice(9), lastTone);   // redraw with a Resume button, same colour
   }
-  if (!window.r820 || !/^v(\d+)/.test(window.r820.version || '') || +window.r820.version.slice(1) < 36) return fail('overlay v36+ not loaded (reload the page and run r820)');
+  if (!window.r820 || !/^v(\d+)/.test(window.r820.version || '') || +window.r820.version.slice(1) < 36) return fail('overlay v36+ not loaded (reload the page and run r820)', true);
   runLoop();
 })();
