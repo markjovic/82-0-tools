@@ -39,6 +39,23 @@
   let stopped = false, games = 0, picks = 0, restarts = 0, skippedRerolls = 0;
   const marker = document.createElement('div'); document.body.append(marker);
   const log = [];
+  // ---------- persistent run log (survives reloads; included in the overlay's "export log") ----------
+  const RUN_KEY = 'r82drvlog', RUN_MAX = 1500;
+  let runLog = []; try { runLog = JSON.parse(localStorage.getItem(RUN_KEY)) || []; } catch (e) {}
+  const persist = (ev, extra) => {
+    runLog.push({ t: new Date().toISOString(), ev, mode: typeof MODE === 'undefined' ? null : MODE, next: window.r820?.next ?? null, seq: window.r820?.seq ?? null,
+      vis: document.visibilityState, focus: document.hasFocus?.() ?? null, ...extra });
+    if (runLog.length > RUN_MAX) runLog = runLog.slice(-RUN_MAX);
+    try { localStorage.setItem(RUN_KEY, JSON.stringify(runLog)); } catch (e) {} };
+  // the last entry before this start tells how the previous run ended (a reload leaves "page unloading" last)
+  const prevLast = runLog[runLog.length - 1];
+  persist('driver started', { previous: prevLast ? `${prevLast.t} ${prevLast.ev}` : null, url: location.href, ua: navigator.userAgent.slice(0, 120) });
+  addEventListener('pagehide', () => persist('page unloading (reload, navigation or tab discarded)'));
+  addEventListener('beforeunload', () => persist('page about to unload'));
+  document.addEventListener('visibilitychange', () => persist('visibility ' + document.visibilityState));
+  addEventListener('error', e => persist('page error', { msg: String(e.message || e.error || '').slice(0, 200), src: (e.filename || '').split('/').pop() + ':' + e.lineno }));
+  addEventListener('unhandledrejection', e => persist('unhandled promise rejection', { msg: String(e.reason?.message || e.reason || '').slice(0, 200) }));
+  window.r82runlog = () => runLog;
   window.r82stop = () => { stopped = true; say('paused by you'); };
   // controls used by the overlay's buttons
   window.r82setMode = m => { MODE = m === 'wilt' ? 'wilt' : 'advice'; finishAfterGame = false; foundWilt = false; };
@@ -62,7 +79,7 @@
   const coinText = () => { const c = coinNow(); if (c != null) { coinLast = c; if (coinStart == null) coinStart = c; }
     return coinStart == null ? 'coins ?' : `coins +${coinLast - coinStart} (now ${coinLast})`; };
   let lastTone = null;
-  const say = (msg, tone) => { lastTone = tone ?? null; log.push(new Date().toISOString().slice(11, 19) + ' ' + msg);
+  const say = (msg, tone) => { lastTone = tone ?? null; persist('status', { msg: String(msg).replace(/<[^>]+>/g, ' ').slice(0, 300), games, picks, restarts }); log.push(new Date().toISOString().slice(11, 19) + ' ' + msg);
     box.style.background = tone === 'gold' ? '#a16207' : tone ? '#991b1b' : '#111827';
     box.innerHTML = `<b>82-0 driver</b> ${MODE === 'wilt' ? '&middot; WILT HUNT' : ''} ${DRY_RUN ? '(DRY RUN)' : ''}<br>games ${games}/${gamesEnd} &middot; picks ${picks} &middot; restarts ${restarts} &middot; ${coinText()}<br>${msg}<br>`
       + (looping && !stopped ? `<button data-d="pause" style="${BTN}">Pause</button>` : `<button data-d="resume" style="${BTN}">Resume</button>`);
@@ -70,7 +87,14 @@
   box.addEventListener('click', e => { const d = e.target.closest && e.target.closest('[data-d]'); if (!d) return;
     if (d.dataset.d === 'pause') window.r82stop(); else window.r82resume(); });
   let looping = false, foundWilt = false;
-  const fail = async msg => { stopped = true; say('STOPPED: ' + msg + '<br><small>see r82log and the console</small>', true); diag(); };
+  const fail = async msg => { stopped = true; say('STOPPED: ' + msg + '<br><small>Resume to retry; export log from the overlay to send me the details</small>', true); diag(); persist('stop snapshot', snapshot()); };
+  const snapshot = () => { try {
+    return { reason: log[log.length - 1], state: window.r820?.state ? { type: window.r820.state.type, open: window.r820.state.open, club: window.r820.state.club, era: window.r820.state.era, picked: window.r820.state.picked } : null,
+      labels: [...document.querySelectorAll('button,[role=button]')].filter(b => !ours(b) && visible(b) && b.getAttribute('aria-label')).map(b => b.getAttribute('aria-label')).slice(0, 60),
+      buttons: [...document.querySelectorAll('button,[role=button],a')].filter(b => !ours(b) && visible(b)).map(b => txt(b).replace(/\s+/g, ' ').slice(0, 40)).filter(Boolean).slice(0, 80),
+      dialogs: [...document.querySelectorAll('[role=dialog],[aria-modal=true]')].filter(d => visible(d)).map(d => txt(d).replace(/\s+/g, ' ').slice(0, 200)),
+      court: !!court(), searchBox: !!searchBox(), url: location.href };
+  } catch (e) { return { snapshotError: e.message }; } };
 
   // ---------- page helpers ----------
   const ours = el => el.closest && (el.closest('#r820panel') || el.closest('#r82drvbox'));
