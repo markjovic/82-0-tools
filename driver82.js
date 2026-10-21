@@ -16,6 +16,7 @@
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   let stopped = false, games = 0, picks = 0, restarts = 0, skippedRerolls = 0;
+  let lastOutline = null;
   const log = [];
   window.r82stop = () => { stopped = true; say('stopped by you'); };
   window.r82log = log;
@@ -37,7 +38,11 @@
   const byText = (re, from = leaves()) => from.filter(el => re.test(txt(el)));
   const click = async (el, what) => {
     if (!el) return false;
-    if (DRY_RUN) { el.style.outline = '3px solid magenta'; say('would click: ' + what); await sleep(1200); el.style.outline = ''; return true; }
+    el = (el.closest && el.closest('button,[role=button]')) || el;   // act on the whole button, not just its text
+    if (DRY_RUN) {   // outline stays until the next action, so it can be seen
+      if (lastOutline) { lastOutline.style.outline = lastOutline.dataset.r82o || ''; lastOutline.style.outlineOffset = ''; }
+      el.dataset.r82o = el.style.outline || ''; el.style.outline = '4px solid magenta'; el.style.outlineOffset = '2px'; lastOutline = el;
+      say('would click: ' + what); await sleep(1200); return true; }
     const r = el.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2, o = { bubbles: true, cancelable: true, clientX: x, clientY: y, view: window };
     for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'])
       el.dispatchEvent(t.startsWith('pointer') ? new PointerEvent(t, { ...o, pointerId: 1, isPrimary: true }) : new MouseEvent(t, o));
