@@ -82,33 +82,22 @@
   const byLabel = re => [...document.querySelectorAll('button,[role=button],a')].find(b => !ours(b) && visible(b) && re.test(b.getAttribute('aria-label') || '')) || null;
   // the court view hides the player list; this button brings it back (and with it the search box)
   const showList = async () => { const b = byLabel(/show the player list/i); if (b) { await click(b, 'show player list'); await sleep(500); return true; } return false; };
-  // moves happen on the court, which the open player list covers: close the list first
+  // Moves happen on the court, which the open player list covers. The game shows a "Hide the player list" button
+  // whenever the list is open (and "Show the player list" when it's closed), so go by those buttons.
   const showCourt = async () => {
-    if (!searchBox()) return true;
-    const b = byLabel(/hide the player list|close the player list|show the court|collapse/i)
-      || [...document.querySelectorAll('button,[role=button]')].find(x => !ours(x) && visible(x) && /player list|court/i.test(x.getAttribute('aria-label') || '') && !/show the player list/i.test(x.getAttribute('aria-label') || ''));
-    if (!b) return false;
-    await click(b, 'show court'); await sleep(600); return !searchBox() || true; };
-
-  // anything we must never interact with or that needs a human
-  const RED_FLAGS = /captcha|verify you are human|are you a robot|purchase|buy now|watch (an )?ad|subscribe|sign in to|log in to|something went wrong|too many requests/i;
-  const checkRedFlags = () => { const dlg = [...document.querySelectorAll('[role=dialog],[aria-modal=true]')].filter(d => !ours(d) && visible(d)).map(txt).join(' ');
-    return RED_FLAGS.test(dlg) ? dlg.slice(0, 160) : null; };
-
-  const diag = () => { const btns = [...document.querySelectorAll('button,[role=button],a')].filter(b => !ours(b) && visible(b)).map(b => (txt(b) || b.getAttribute('aria-label') || b.className || '?').slice(0, 30));
-    const labels = [...document.querySelectorAll('button,[role=button]')].filter(b => !ours(b) && visible(b) && b.getAttribute('aria-label')).map(b => b.getAttribute('aria-label'));
-    console.log('[82-0 driver] button labels:', labels);
-    console.log('[82-0 driver] visible buttons:', btns, '| overlay next:', window.r820?.next, '| state:', window.r820?.state, '| court found:', !!court(), '| search box:', !!searchBox()); };
-
-  // wait for the overlay to publish new advice (proves the last action registered)
-  const waitSeq = async (from, ms = SEQ_WAIT) => { const t = Date.now(); while (Date.now() - t < ms) { if (stopped) return false; if (window.r820?.seq !== from) { await sleep(150); return true; } await sleep(120); } return false; };
-
-  // ---------- actions ----------
+    const hide = byLabel(/hide the player list/i);
+    if (!hide) return true;                     // list already closed
+    await click(hide, 'hide player list'); await sleep(600);
+    if (DRY_RUN) { await waitFor(() => !byLabel(/hide the player list/i) || null, 'the list to close'); }
+    return true; };
   async function pickPlayer(name, slot) {
     const re = new RegExp('^' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$');
     let cand = [];
     for (let attempt = 0; attempt < 3 && !cand.length && !stopped; attempt++) {
-      if (!searchBox()) await showList();
+      if (byLabel(/show the player list/i)) {   // list closed (e.g. after a move): open it
+        await showList();
+        if (DRY_RUN) await waitFor(() => !byLabel(/show the player list/i) || null, 'the list to open');
+      }
       const sb = searchBox();
       if (sb) await typeInto(sb, name);
       cand = byText(re);
@@ -152,7 +141,10 @@
     if (DRY_RUN) say(`dry run: do the outlined step yourself; waiting for ${what}`);
     while (Date.now() - t < ms && !stopped) { const el = find(); if (el) return el; await sleep(250); } return null; };
   const dist = (a, b) => { const r = a.getBoundingClientRect(), q = b.getBoundingClientRect(); return Math.hypot(r.left - q.left, r.top - q.top); };
+  const findClaim = () => byText(/^claim\b/i).filter(el => !/x2|double|watch|\bad\b|video/i.test(txt(el.closest('button,[role=button]') || el))).sort((a, b) => txt(a).length - txt(b).length)[0] || null;
   async function finishGame() {
+    // the coins reward pops up a moment after the result: give it time before reaching for DRAFT AGAIN
+    for (let t = 0; t < 12 && !findClaim() && !stopped; t++) await sleep(250);
     for (let i = 0; i < 6 && !stopped; i++) {      // reward / level-up screens come in some order
       const claim = byText(/^claim\b/i).filter(el => !/x2|double|watch|\bad\b|video/i.test(txt(el.closest('button,[role=button]') || el))).sort((a, b) => txt(a).length - txt(b).length)[0] || null, tap = byText(/tap anywhere/i)[0], again = button(/^draft again\b/i);
       if (claim) { await click(claim, 'CLAIM'); continue; }
@@ -176,6 +168,8 @@
   let lastResultSeen = null, idle = 0;
   while (!stopped && games < MAX_GAMES) {
     const flag = checkRedFlags(); if (flag) { await fail('unexpected prompt: ' + flag); break; }
+    const stray = findClaim() || byText(/tap anywhere/i)[0];
+    if (stray) { await click(stray, txt(stray).toUpperCase() || 'popup'); if (DRY_RUN) await sleep(2000); continue; }
     const seq = window.r820.seq, next = window.r820.next || 'WAIT', parts = next.split('|');
     const kind = parts[0];
     if (kind === 'WAIT') { if (!(await spin())) { if (++idle > 25) { await fail('nothing to do: no spin button and no advice'); break; } await sleep(400); } else await waitSeq(seq); continue; }
