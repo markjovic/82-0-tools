@@ -181,7 +181,9 @@
     if (!lab) return [...document.querySelectorAll('button,[role=button]')].find(b => !ours(b) && visible(b) && (b.getAttribute('aria-label') || '').trim() === s) || null;
     const own = lab.closest('button,[role=button]'); if (own && !ours(own)) return own;
     const r = lab.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-    const near = [...document.querySelectorAll('button,[role=button]')].filter(b => !ours(b) && visible(b))
+    // never pick a control that happens to sit near the label (the re-roll and booster buttons are close to the court)
+    const notControl = b => !/respin|double pick|\btrade\b|\bprime\b|booster|spin|coin|menu|go back|player list|search|sort/i.test((b.getAttribute('aria-label') || '') + ' ' + txt(b));
+    const near = [...document.querySelectorAll('button,[role=button]')].filter(b => !ours(b) && visible(b) && notControl(b))
       .map(b => { const q = b.getBoundingClientRect(); return [Math.hypot(q.left + q.width / 2 - cx, q.top + q.height / 2 - cy), b]; })
       .sort((a, b) => a[0] - b[0])[0];
     return near && near[0] < 120 ? near[1] : lab; };
