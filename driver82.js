@@ -61,6 +61,9 @@
   const slotEl = s => court()?.[s]?.[0] || null;
   const searchBox = () => [...document.querySelectorAll('input')].find(i => !ours(i) && visible(i) && /search/i.test(i.placeholder || i.getAttribute('aria-label') || ''));
   const button = re => byText(re).sort((a, b) => txt(a).length - txt(b).length)[0] || null;
+  const byLabel = re => [...document.querySelectorAll('button,[role=button],a')].find(b => !ours(b) && visible(b) && re.test(b.getAttribute('aria-label') || '')) || null;
+  // the court view hides the player list; this button brings it back (and with it the search box)
+  const showList = async () => { const b = byLabel(/show the player list/i); if (b) { await click(b, 'show player list'); await sleep(500); return true; } return false; };
 
   // anything we must never interact with or that needs a human
   const RED_FLAGS = /captcha|verify you are human|are you a robot|purchase|buy now|watch (an )?ad|subscribe|sign in to|log in to|something went wrong|too many requests/i;
@@ -78,10 +81,11 @@
     const re = new RegExp('^' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$');
     let cand = [];
     for (let attempt = 0; attempt < 3 && !cand.length && !stopped; attempt++) {
+      if (!searchBox()) await showList();
       const sb = searchBox();
       if (sb) await typeInto(sb, name);
       cand = byText(re);
-      if (!cand.length) { await spin(); await sleep(1500); }   // the new spin may still need revealing
+      if (!cand.length) await sleep(900);   // the list may still be filtering / animating
     }
     if (!cand.length) return fail(`player "${name}" not found in the list`);
     await click(cand[0], name);
@@ -99,7 +103,7 @@
     return true;
   }
   async function restart() {
-    const back = [...document.querySelectorAll('button,[role=button],a')].find(b => !ours(b) && visible(b) && (/back/i.test(b.getAttribute('aria-label') || '') || /^[‹<←]$/.test(txt(b))))
+    const back = byLabel(/^go back$/i) || [...document.querySelectorAll('button,[role=button],a')].find(b => !ours(b) && visible(b) && (/back/i.test(b.getAttribute('aria-label') || '') || /^[‹<←]$/.test(txt(b))))
       || [...document.querySelectorAll('button')].filter(b => !ours(b) && visible(b)).sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top || a.getBoundingClientRect().left - b.getBoundingClientRect().left)[0];
     if (!back) return fail('back button not found for RESTART');
     await click(back, 'back');
@@ -126,9 +130,12 @@
     }
     return fail('"DRAFT AGAIN" not found after the result');
   }
-  async function spin() {
-    const b = button(/^spin$/i); if (!b) return false;
-    await click(b, 'SPIN'); return true;
+  // SPIN sends the pick you just placed and spins the next club/era. After the fifth pick the same job is done by a
+  // finishing button; its exact wording isn't known yet, so a few likely labels are tried and anything else stops.
+  async function spin(last) {
+    const b = button(/^spin$/i) || (last ? button(/^(simulate|sim season|play season|finish|see results|submit|done|confirm)$/i) : null);
+    if (!b) return false;
+    await click(b, txt(b).toUpperCase()); return true;
   }
 
   // ---------- main loop ----------
@@ -158,8 +165,11 @@
     const [, name, slot] = take || parts.slice(i);
     say(`${kind.startsWith('REROLL') ? 'skip re-roll, ' : ''}take ${name} → ${slot}`);
     if (!(await pickPlayer(name, slot))) break;
-    if (!(await waitSeq(seq))) {   // one retry: the court may not have been ready
-      const s = slotEl(slot); if (s) { say(`retrying ${slot} for ${name}`); await click(s, slot); }
+    // placing is local; the pick is only sent when SPIN (or, after the fifth pick, the finishing button) is pressed
+    const last = (window.r820?.state?.picked?.length || 0) >= 4;
+    if (!(await spin(last))) { await fail(last ? 'placed the fifth player but found no button to finish the draft' : 'placed the player but found no SPIN button to send the pick'); break; }
+    if (!(await waitSeq(seq))) {   // one retry: the court may not have been ready, so place again and re-send
+      const s = slotEl(slot); if (s) { say(`retrying ${slot} for ${name}`); await click(s, slot); await spin(last); }
       if (!(await waitSeq(seq))) { await fail(`pick of ${name} → ${slot} did not register`); break; }
     }
     picks++;
