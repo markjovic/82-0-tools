@@ -9,7 +9,7 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null };
-  const VERSION = 'v33';
+  const VERSION = 'v34';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -371,7 +371,8 @@
     const st = window.r82state?.(), running = st?.running;
     const b = (act, label, on, title) => `<span data-r82="${act}" title="${title}" style="${BTN};${on ? 'background:#f59e0b;color:#1a1a1a' : ''}">${label}</span>`;
     const what = driverLoading ? 'loading…' : running ? (st.mode === 'wilt' ? `hunting Wilt · ${st.restarts} restarts` : `auto · game ${st.games + 1}`) : st?.foundWilt ? '#1 C found: your turn' : st ? 'paused' : 'off';
-    return `<div style="margin:2px 0 5px;display:flex;align-items:center;gap:2px;flex-wrap:wrap"><small style="opacity:.75;margin-right:4px">Auto: ${what}</small>`
+    const coins = st?.coinsGained != null ? ` · +${st.coinsGained} coins` : '';
+    return `<div style="margin:2px 0 5px;display:flex;align-items:center;gap:2px;flex-wrap:wrap"><small style="opacity:.75;margin-right:4px">Auto: ${what}${coins}</small>`
       + b('drv-auto', '&#9654; Auto', running && st.mode === 'advice', 'Play drafts by the overlay\'s advice')
       + b('drv-wilt', '&#127919; Wilt', running && st.mode === 'wilt', 'Hunt for the #1 C: S-grade picks only, C kept free, pauses when he appears')
       + (running ? b('drv-pause', '&#10074;&#10074; Pause', false, 'Pause the auto-driver') : '') + '</div>';

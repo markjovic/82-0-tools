@@ -16,6 +16,10 @@
   // caps apply per batch: when one is reached the driver stops, and pressing Resume / Auto / Wilt starts a new batch
   let gamesEnd = MAX_GAMES, restartsEnd = MAX_RESTARTS;
   let finishAfterGame = false;
+  // Wilt hunt: once a draft has 2 S-grade picks it is kept and played to the end on the overlay's advice (for the
+  // coins), still pausing if the #1 C turns up. sPicks counts S-grade picks in the current draft.
+  const KEEP_AFTER_S = 2;
+  let sPicks = 0;
   const GAP_MS     = 700;    // pause between actions (human pace; don't go much lower)
   const COURT_MS   = 1700;   // the court slides in after a player is selected; clicks before this are ignored
   const SEQ_WAIT   = 9000;   // how long to wait for the overlay to confirm an action registered
@@ -37,7 +41,7 @@
   window.r82stop = () => { stopped = true; say('paused by you'); };
   // controls used by the overlay's buttons
   window.r82setMode = m => { MODE = m === 'wilt' ? 'wilt' : 'advice'; finishAfterGame = false; foundWilt = false; };
-  window.r82state = () => ({ running: looping && !stopped, mode: MODE, foundWilt, games, picks, restarts });
+  window.r82state = () => ({ running: looping && !stopped, mode: MODE, foundWilt, games, picks, restarts, coinsGained: coinStart == null ? null : coinLast - coinStart });
   window.r82resume = () => { if (looping) return; stopped = false;
     if (games >= gamesEnd) gamesEnd = games + MAX_GAMES;
     if (restarts >= restartsEnd) restartsEnd = restarts + MAX_RESTARTS;
@@ -51,10 +55,15 @@
   box.style.cssText = 'position:fixed;left:6px;top:6px;z-index:100000;background:#111827;color:#fff;font:12px/1.35 system-ui,sans-serif;padding:6px 8px;border-radius:6px;max-width:300px;opacity:.9';
   document.body.append(box);
   const BTN = 'margin:4px 4px 0 0;padding:2px 8px;border-radius:4px;border:0;font:700 11px system-ui,sans-serif;cursor:pointer';
+  // coins: the game labels its coin counter "Coin balance N"; the run's gain is the change since the driver started
+  const coinNow = () => { for (const el of document.querySelectorAll('[aria-label]')) { const m = /coin balance\s*([\d,]+)/i.exec(el.getAttribute('aria-label') || ''); if (m) return +m[1].replace(/,/g, ''); } return null; };
+  let coinStart = null, coinLast = null;
+  const coinText = () => { const c = coinNow(); if (c != null) { coinLast = c; if (coinStart == null) coinStart = c; }
+    return coinStart == null ? 'coins ?' : `coins +${coinLast - coinStart} (now ${coinLast})`; };
   let lastTone = null;
   const say = (msg, tone) => { lastTone = tone ?? null; log.push(new Date().toISOString().slice(11, 19) + ' ' + msg);
     box.style.background = tone === 'gold' ? '#a16207' : tone ? '#991b1b' : '#111827';
-    box.innerHTML = `<b>82-0 driver</b> ${MODE === 'wilt' ? '&middot; WILT HUNT' : ''} ${DRY_RUN ? '(DRY RUN)' : ''}<br>games ${games}/${gamesEnd} &middot; picks ${picks} &middot; restarts ${restarts}<br>${msg}<br>`
+    box.innerHTML = `<b>82-0 driver</b> ${MODE === 'wilt' ? '&middot; WILT HUNT' : ''} ${DRY_RUN ? '(DRY RUN)' : ''}<br>games ${games}/${gamesEnd} &middot; picks ${picks} &middot; restarts ${restarts} &middot; ${coinText()}<br>${msg}<br>`
       + (looping && !stopped ? `<button data-d="pause" style="${BTN}">Pause</button>` : `<button data-d="resume" style="${BTN}">Resume</button>`);
     console.log('[82-0 driver]', msg); try { window.r82render?.(); } catch (e) {} };
   box.addEventListener('click', e => { const d = e.target.closest && e.target.closest('[data-d]'); if (!d) return;
@@ -252,7 +261,7 @@
     if (kind === 'NONE') { await fail('overlay says nobody on this spin fits'); break; }
     if (kind === 'RESULT') {
       const key = parts.slice(1).join('|') + '|' + window.r820.seq;
-      if (lastResultSeen !== key) { lastResultSeen = key; games++; say(`game ${games}: ${parts[1]} (score ${parts[2]}, model ${window.r820.state?.model})`);
+      if (lastResultSeen !== key) { lastResultSeen = key; games++; sPicks = 0; say(`game ${games}: ${parts[1]} (score ${parts[2]}, model ${window.r820.state?.model})`);
         if (finishAfterGame) { stopped = true; say(`done: the #1 C draft finished ${parts[1]} (score ${parts[2]})`, 'gold'); break; } }
       await finishGame(); await waitSeq(seq, 4000); continue;
     }
@@ -263,18 +272,23 @@
         say(`FOUND the #1 C: ${wilt.name} (value ${wilt.value}). Your turn. Press Resume to let it finish this draft on the overlay's advice.`, 'gold');
         try { const ac = new AudioContext(), o = ac.createOscillator(); o.frequency.value = 880; o.connect(ac.destination); o.start(); o.stop(ac.currentTime + 0.4); } catch (e) {}   // a short beep
         break; }
+      if (sPicks >= KEEP_AFTER_S) { /* committed: play the rest of this draft on the overlay's advice below */ }
+      else {
       const nonC = open.filter(x => x !== 'C');
       const cands = offer.flatMap(p => Object.entries(p.ranks || {}).filter(([x, r]) => nonC.includes(x) && r <= 10).map(([x, r]) => ({ name: p.name, slot: x, r, v: p.value })))
         .sort((a, b) => b.v - a.v || a.r - b.r);
-      if (!cands.length) { restarts++; say(`no S-grade player for ${nonC.join('/') || 'any open position'} on ${st.club} ${st.era}: new draft`); if (!(await restart())) break; await waitSeq(seq, 6000); continue; }
+      if (!cands.length) { restarts++; sPicks = 0; say(`no S-grade player for ${nonC.join('/') || 'any open position'} on ${st.club} ${st.era}: new draft`); if (!(await restart())) break; await waitSeq(seq, 6000); continue; }
       const c = cands[0];
       say(`S-grade: take ${c.name} → ${c.slot} (#${c.r} ${c.slot})`);
       if (!(await pickPlayer(c.name, c.slot))) break;
       if (!(await spin(false))) { await fail('placed the player but found no SPIN button to send the pick'); break; }
       if (!(await waitSeq(seq))) { await fail(`pick of ${c.name} → ${c.slot} did not register`); break; }
-      picks++; continue;
+      picks++; sPicks++;
+      if (sPicks >= KEEP_AFTER_S) say(`${sPicks} S-grade picks: keeping this draft and finishing it on the overlay's advice`);
+      continue;
+      }
     }
-    if (kind === 'RESTART') { restarts++; say('restart (weak first spin)'); if (!(await restart())) break; await waitSeq(seq, 6000); continue; }
+    if (kind === 'RESTART') { restarts++; sPicks = 0; say('restart (weak first spin)'); if (!(await restart())) break; await waitSeq(seq, 6000); continue; }
     // TAKE, MOVE...|TAKE, or REROLL_* (never re-roll: take the "otherwise" pick)
     if (kind.startsWith('REROLL')) skippedRerolls++;
     let i = kind.startsWith('REROLL') ? 1 : 0, ok = true;
