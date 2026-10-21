@@ -36,7 +36,7 @@
     while (hidden() && !stopped) await sleep(500);
     if (!stopped) { say('resumed'); await sleep(1500); }   // let the game catch up on its animations
     return true; };
-  let stopped = false, games = 0, picks = 0, restarts = 0, skippedRerolls = 0;
+  let stopped = false, games = 0, picks = 0, restarts = 0, skippedRerolls = 0, rerollsUsed = 0;
   const marker = document.createElement('div'); document.body.append(marker);
   const log = [];
   // ---------- persistent run log (survives reloads; included in the overlay's "export log") ----------
@@ -102,12 +102,15 @@
   const leaves = () => [...document.body.querySelectorAll('*')].filter(el => !el.children.length && !ours(el) && visible(el));
   const txt = el => (el.innerText || el.textContent || '').trim();
   const byText = (re, from = leaves()) => from.filter(el => re.test(txt(el)));
-  const click = async (el, what) => {
+  const click = async (el, what, opts = {}) => {
     if (!el) return false;
     el = (el.closest && el.closest('button,[role=button]')) || el;   // act on the whole button, not just its text
     // hard block: never press boosters, re-rolls, sharing, account or ad controls, whatever the logic above decided
     const label = ((el.getAttribute && el.getAttribute('aria-label')) || '') + ' ' + txt(el);
-    if (/double pick|\btrade\b|\bprime\b|respin|booster|share results|sign out|watch|\bx2\b|rewarded|coin balance/i.test(label)) {
+    // (the one exception: a deliberate free/owned re-roll on the final pick in Auto, which passes allowRespin)
+    const blocked = opts.allowRespin ? /double pick|\btrade\b|\bprime\b|booster|share results|sign out|watch|\bx2\b|rewarded|coin balance/i
+                                     : /double pick|\btrade\b|\bprime\b|respin|booster|share results|sign out|watch|\bx2\b|rewarded|coin balance/i;
+    if (blocked.test(label)) {
       await fail(`refused to click a blocked control: "${label.trim().slice(0, 60)}"`); return false; }
     if (DRY_RUN) {   // a magenta frame drawn over the page (not on the element, so nothing can clip it); stays until the next action
       const r = el.getBoundingClientRect();
@@ -315,6 +318,21 @@
     }
     if (kind === 'RESTART') { restarts++; sPicks = 0; say('restart (weak first spin)'); if (!(await restart())) break; await waitSeq(seq, 6000); continue; }
     // TAKE, MOVE...|TAKE, or REROLL_* (never re-roll: take the "otherwise" pick)
+    // Auto mode, final pick: if the overlay recommends a re-roll and it's free, owned or bought with coins, use it.
+    // Re-rolls that need an ad are never used; any other re-roll advice takes the "otherwise" pick.
+    if (kind.startsWith('REROLL') && MODE === 'advice' && (window.r820?.state?.picked?.length || 0) === 4) {
+      const cost = String(window.r820?.state?.cost || ''), scope = kind === 'REROLL_ERA' ? 'era' : 'team';
+      if (cost === 'free' || /owned/i.test(cost) || /coins/i.test(cost)) {
+        const btn = byLabel(new RegExp('^respin ' + scope, 'i'));
+        if (btn && !/\(0 left\)/i.test(btn.getAttribute('aria-label') || '')) {
+          say(`final pick: using the ${scope} re-roll (${cost})`);
+          await click(btn, `re-roll ${scope}`, { allowRespin: true });
+          if (!(await waitSeq(seq))) { await fail(`the ${scope} re-roll did not register`); break; }
+          rerollsUsed++; continue;
+        }
+        say(`final pick: ${scope} re-roll recommended but its button shows none left; taking the other pick`);
+      } else say(`final pick: ${scope} re-roll recommended but it ${cost || 'has a cost'}; taking the other pick`);
+    }
     if (kind.startsWith('REROLL')) skippedRerolls++;
     let i = kind.startsWith('REROLL') ? 1 : 0, ok = true;
     const take = kind.startsWith('REROLL') ? ['TAKE', parts[1], parts[2]] : null;
