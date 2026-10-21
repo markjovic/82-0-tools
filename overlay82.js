@@ -9,7 +9,7 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null };
-  const VERSION = 'v29';
+  const VERSION = 'v30';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -129,6 +129,7 @@
   // re-rolls used this game; seenStart = the overlay saw this game from its first spin, so 'unused' is known
   let rerolls = { team: false, era: false }, seenStart = false;
   const P = document.createElement('div');
+  P.id = 'r820panel';   // lets the automation driver ignore the overlay's own text
   // The panel can be dragged anywhere; where you leave it is remembered in this browser.
   const POS_KEY = 'r82pos';
   let pos = null; try { pos = JSON.parse(localStorage.getItem(POS_KEY)); } catch (e) {}
