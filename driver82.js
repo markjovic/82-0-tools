@@ -303,11 +303,17 @@
     const newScreen = () => btnText(/^pro basketball$/i)[0] || null;
     if (await waitFor(() => newScreen() || btnText(/^play$/i)[0] || null, 'the start screen')) {
       if (newScreen()) {
+        // "Selected" can sit on the button, a parent or a child, and there may be more than one copy of the button,
+        // so check them all. The title on the screen (e.g. "CLASSIC" over "PRO BASKETBALL", outside any button)
+        // also shows what's selected, and is accepted as confirmation.
+        const selDeep = b => [b, b.parentElement, ...b.querySelectorAll('*')].some(x => x && x.getAttribute && sel(x));
+        const titleShows = re => leaves().some(el => re.test(txt(el)) && !el.closest('button,[role=button],a'));
+        const isOn = re => btnText(re).some(selDeep) || titleShows(re);
         const ensure = async (re, what) => {
+          if (isOn(re)) return true;
           const b = btnText(re)[0]; if (!b) return fail(`start screen: "${what}" option not found`, true);
-          if (sel(b)) return true;
-          await click(b, what); await sleep(700);
-          return sel(btnText(re)[0] || b) || DRY_RUN || fail(`start screen: couldn't select "${what}"`, true); };
+          await click(b, what); await sleep(800);
+          return isOn(re) || DRY_RUN || fail(`start screen: couldn't select "${what}"`, true); };
         if (!(await ensure(/^pro basketball$/i, 'PRO BASKETBALL'))) return false;
         if (btnText(/^classic$/i).length && !(await ensure(/^classic$/i, 'CLASSIC'))) return false;
         const plays = btnText(/^play$/i);
