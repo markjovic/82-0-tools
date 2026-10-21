@@ -20,6 +20,8 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
 <main class="wrap">
 <div class="card"><p><strong>Overlay bookmarklet.</strong> Save it as a bookmark&rsquo;s URL, then run it on 82-0.com before your first pick. It only reads what the game already shows you and sends nothing to the game.</p>
 <button class="btn" id="copy" type="button">Copy bookmarklet</button> <a class="btn ghost" id="drag" href="javascript:(()=&gt;{if(window.r820)return;const s=document.createElement(&#x27;script&#x27;);s.src=&#x27;https://markjovic.github.io/82-0-tools/overlay82.js?v=&#x27;+Date.now();s.onerror=()=&gt;alert(&#x27;82-0 overlay could not be loaded from markjovic.github.io (blocked or missing).&#x27;);document.head.append(s)})()">Drag to bookmarks bar</a><span id="msg" aria-live="polite"></span></div>
+<div class="card"><p><strong>Auto-driver bookmarklet.</strong> Plays Classic drafts by itself, following the overlay (desktop, its own tab; stops after 30 games or on anything unexpected; never re-rolls, uses boosters, spends coins or watches ads). Stop it with <code>r82stop()</code> in the console, or reload the tab.</p>
+<button class="btn" id="copyauto" type="button">Copy auto bookmarklet</button><span id="msgauto" aria-live="polite"></span></div>
 <div class="card"><p><strong>Where it&rsquo;s up to.</strong> 82-0 works out your record on its own server, so the formula isn&rsquo;t visible. The overlay logs every finished game in your browser; after about 30 games, export the log and the scoring can be fitted from it.</p></div>
 </main>
 <script>
@@ -28,6 +30,12 @@ document.getElementById('copy').addEventListener('click', async () => {
   const m = document.getElementById('msg');
   try { await navigator.clipboard.writeText(BOOKMARKLET); m.textContent = 'Copied ' + BOOKMARKLET.length + ' characters.'; }
   catch (e) { m.textContent = 'Copy failed (' + e.message + '). Long-press the drag button and copy its link instead.'; }
+});
+const AUTO = "javascript:(()=>{const L=s=>new Promise((o,b)=>{const e=document.createElement('script');e.src=s+'?v='+Date.now();e.onload=o;e.onerror=()=>b(Error('could not load '+s));document.head.append(e)});(async()=>{window.r82dry=false;if(!window.r820)await L('https://markjovic.github.io/82-0-tools/overlay82.js');for(let i=0;i<50&&!(window.r820&&window.r820.version);i++)await new Promise(r=>setTimeout(r,200));if(!window.r820||!window.r820.version)throw Error('overlay did not start');await L('https://markjovic.github.io/82-0-tools/driver82.js')})().catch(e=>alert('82-0 auto: '+e.message))})()";
+document.getElementById('copyauto').addEventListener('click', async () => {
+  const m = document.getElementById('msgauto');
+  try { await navigator.clipboard.writeText(AUTO); m.textContent = ' Copied ' + AUTO.length + ' characters.'; }
+  catch (e) { m.textContent = ' Copy failed (' + e.message + ').'; }
 });
 document.getElementById('drag').addEventListener('click', e => { e.preventDefault(); document.getElementById('msg').textContent = 'Drag this button to your bookmarks bar, or use Copy.'; });
 </script></body></html>
