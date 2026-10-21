@@ -5,7 +5,7 @@
 (() => {
   if (window.r820) return;
   window.r820 = 1;
-  const VERSION = 'v25';
+  const VERSION = 'v26';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -17,6 +17,8 @@
   const winsFor = s => Math.max(0, Math.min(82, Math.round(82 * Math.pow(Math.max(0, s) / 119.9, 1.155))));
   const SCORE_82 = 119.36;
   const SIMS = 800;
+  const COIN_COST = 100;   // coins per re-roll once free / owned ones are used (as the game shows it)
+  let coins = null;        // coin balance, read from the user record the game sends with each reply
   // Shared squad list published on the site (every club/era squad seen across all logs), merged with this browser's own.
   const SQUADS_URL = 'https://markjovic.github.io/82-0-tools/squads.json';
   let SITE = {}, siteNote = 'loading shared squads';
@@ -170,7 +172,7 @@
     const team = SLOTS.filter(sl => picks[sl]).map(sl => picks[sl]);
     const cur = new Map(SLOTS.filter(sl => picks[sl]).map(sl => [String(picks[sl].player_id), sl]));
     const used = new Set(team.map(p => String(p.player_id)));
-    const sig = SLOTS.map(sl => sl + (picks[sl]?.player_id || '')).join() + '|' + cell.team?.team_id + cell.era + '|' + squads().length + '|' + rerolls.team + rerolls.era + '|' + JSON.stringify(cell.boosters || null);
+    const sig = SLOTS.map(sl => sl + (picks[sl]?.player_id || '')).join() + '|' + cell.team?.team_id + cell.era + '|' + squads().length + '|' + rerolls.team + rerolls.era + '|' + JSON.stringify(cell.boosters || null) + '|' + (cell.legal || []).join() + '|' + coins;
     if (sig === cache.sig) return cache;
     // candidates: every player on this spin who can join the team in some arrangement, best values first
     const cands = (cell.squad || []).filter(p => !used.has(String(p.player_id)) && feasible([...team, p])).map(p => ({ p, v: val(p) })).sort((a, b) => b.v - a.v).slice(0, 6);
@@ -205,9 +207,16 @@
     const eraPool = qs.filter(q => q.team?.team_id === cell.team?.team_id && q.era !== cell.era);
     // Re-roll availability comes from the game itself: each spin lists its boosters with how many uses are left.
     const boost = key => cell.boosters?.['respin_' + key];
-    const avail = key => { const b = boost(key); if (!b) return !rerolls[key] ? null : false;
-      return !!(b.enabled && (b.next_use && b.next_use !== 'none') && ((+b.remaining || 0) > 0 || (+b.free_left || 0) > 0 || (+b.rv_left || 0) > 0)); };
-    const costNote = key => { const b = boost(key); return b && b.next_use && !['free', 'none'].includes(b.next_use) ? ` (costs: ${b.next_use === 'rv' ? 'watch an ad' : b.next_use})` : ''; };
+    // A re-roll is available if the booster has a use left (free, owned or by ad), or failing that if the game still
+    // lists "respin" as a legal action and you hold enough coins to buy one. Capped by the game's per-draft limit.
+    const capped = b => b && (+b.used_in_draft || 0) >= (+b.max_per_draft || Infinity);
+    const boosterUse = b => !!(b && b.enabled && b.next_use && b.next_use !== 'none' && ((+b.remaining || 0) > 0 || (+b.free_left || 0) > 0 || (+b.rv_left || 0) > 0 || (+b.owned_left || 0) > 0));
+    const coinUse = b => (!b || b.enabled) && (cell.legal || []).includes('respin') && coins != null && coins >= COIN_COST;
+    const avail = key => { const b = boost(key); if (!b && !cell.legal) return !rerolls[key] ? null : false;
+      if (capped(b)) return false; return boosterUse(b) || coinUse(b); };
+    const costNote = key => { const b = boost(key);
+      if (boosterUse(b)) return b.next_use === 'free' ? '' : ` (${b.next_use === 'rv' ? 'watch an ad' : b.next_use === 'owned' ? 'uses an owned re-roll' : 'costs: ' + b.next_use})`;
+      return coinUse(b) ? ` (costs ${COIN_COST} coins, you have ${coins})` : ''; };
     const reach = maxReach(team);
     // Re-rolls are only worth spending to chase 82-0: never before 3 players are in place, and only while the team
     // picked so far can still reach the 82-0 score with the best remaining picks.
@@ -257,6 +266,7 @@
     let h = `Picked: ${team.length ? SLOTS.filter(sl => picks[sl]).map(sl => `${sl} ${esc(picks[sl].name)} ${val(picks[sl]).toFixed(1)}`).join(', ') : 'none yet'}`;
     if (!rerollOK) h += `<br><small>Re-roll advice: ${team.length < 3 ? `only after 3 players are picked (${team.length} so far)` : '82-0 is no longer reachable with this team, so a re-roll would be wasted'}.</small>`;
     for (const r of rr) h += `<br>&nbsp; <span style="color:${r.name === 'Era' ? '#c4b5fd' : '#fcd34d'}">${r.name} re-roll</span>: <b>${pct(r.p82)}</b>, ${rec(r.avg)} <small>(${r.n} squads seen)</small>`;
+    if (coins != null) h += `<br><small>Coins: ${coins} (${Math.floor(coins / COIN_COST)} re-roll${Math.floor(coins / COIN_COST) === 1 ? '' : 's'} at ${COIN_COST})</small>`;
     const none = ['team', 'era'].filter(k => avail(k) === false).map(k => k === 'team' ? 'Team' : 'Era');
     if (none.length) h += `<br><small>${none.length === 2 ? 'No re-rolls left' : none[0] + ' re-roll: none left'}${cell.boosters ? ' (per the game)' : ''}.</small>`;
     cache = { sig, banner: top_ + oddsHtml, opts: restart ? '' : opts, h, rec: top };
@@ -309,6 +319,8 @@
             const p = (cell.squad || []).find(x => String(x.player_id) === String(act.player_id) && String(x.team_id) === String(act.team_id));
             picks[act.slot] = p || { player_id: act.player_id, name: `#${act.player_id}`, stats: {} };
           }
+          const bal = j?.user?.wallet?.balances;
+          if (bal && bal.coin != null) { coins = +bal.coin; LOG.lastWallet = { at: new Date().toISOString(), balances: bal }; }
           if (j?.cell) {
             cell = j.cell; result = null;
             if (j.cell.seq === 0 && !act) { picks = {}; rerolls = { team: false, era: false }; seenStart = true; }
