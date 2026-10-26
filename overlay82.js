@@ -9,7 +9,7 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null };
-  const VERSION = 'v44';
+  const VERSION = 'v46';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -261,8 +261,12 @@
     const reach = maxReach(team);
     // Re-rolls are only worth spending to chase 82-0: never before 3 players are in place, and only while the team
     // picked so far can still reach the 82-0 score with the best remaining picks.
-    const rerollOK = team.length >= 3 && reach !== null && reach >= SCORE_82;
-    const rr = [['Team', clubPool, 'team'], ['Era', eraPool, 'era']].filter(([, pl, key]) => pl.length && avail(key) !== false)
+    // re-rolls are only ever shown or advised when 82-0 is still possible and the team already has an S-tier player
+    const sNow = SLOTS.filter(sl => picks[sl] && rankNum(picks[sl], sl) <= 10).length;
+    const reachable = reach !== null && reach >= SCORE_82;
+    const rerollOK = team.length >= 3 && reachable && sNow > 0;
+    const showRR = reachable && sNow > 0;
+    const rr = !showRR ? [] : [['Team', clubPool, 'team'], ['Era', eraPool, 'era']].filter(([, pl, key]) => pl.length && avail(key) !== false)
       .map(([name, pl, key]) => ({ name, n: pl.length, known: avail(key) === true, cost: costNote(key), ...simulate(team, { pool: pl }, SIMS) }));
     const out = reach !== null && reach < SCORE_82;
     const better = !rerollOK ? null : rr.filter(r => top && r.p82 - top.p82 >= 0.03).sort((a, b) => (b.p82 - a.p82) || (b.avg - a.avg))[0];
@@ -374,7 +378,8 @@
     const fitsTeam = p => feasible([...team, p]);
     const bestSlotFor = p => (p.positions || []).filter(x => SLOTS.includes(x)).map(x => [x, tierOf(p, x)]).sort((a, b) => a[1] - b[1])[0] || null;
     const flags = {};
-    for (const p of offerNow) { const b = bestSlotFor(p); if (b && b[1] === 1 && fitsTeam(p)) { flags.no1 = { name: p.name, slot: b[0] }; break; } }
+    if (team.length === 0 || teamAllS)   // a #1 is only worth stopping for on an empty team or one that's all S-tier
+      for (const p of offerNow) { const b = bestSlotFor(p); if (b && b[1] === 1 && fitsTeam(p)) { flags.no1 = { name: p.name, slot: b[0] }; break; } }
     if (team.length >= 2 && teamAllS) flags.startS = { count: teamS };
     if (teamS > 0) {
       // a trade worth stopping for swaps a non-S player out for an S-tier one from this roll
@@ -389,9 +394,18 @@
           const b = bestSlotFor(pp); if (b && b[1] <= 10 && !(bestSlotFor(p)?.[1] <= 10)) { flags.primeS = { name: p.name, slot: b[0], rank: b[1], from: +val(p).toFixed(1), to: +val(pp).toFixed(1) }; break; } } }
       if (bAvail('double_pick') && team.length <= 3) {
         const sP = offerNow.filter(p => { const b = bestSlotFor(p); return b && b[1] <= 10 && fitsTeam(p); });
-        outer: for (let i = 0; i < sP.length; i++) for (let k = i + 1; k < sP.length; k++) if (feasible([...team, sP[i], sP[k]])) { flags.doubleS = { a: sP[i].name, b: sP[k].name }; break outer; }
+        outer: for (let i = 0; i < sP.length; i++) for (let k = i + 1; k < sP.length; k++) if (feasible([...team, sP[i], sP[k]])) {
+          const pair = [sP[i], sP[k]], sim = boosts.find(b => b.kind === 'DOUBLE' && b.pair.includes(pair[0]) && b.pair.includes(pair[1])) || simulate(team, { pair }, BSIMS);
+          flags.doubleS = { a: sP[i].name, b: sP[k].name, p82: sim.p82, rec: rec(sim.avg) }; break outer; }
       }
     }
+    // what you could actually do about it: a re-roll (shown only when 82-0 is possible and you have an S-tier
+    // player) or a booster. Alerts other than 82-0 only fire when there's at least one such option.
+    const options = [...rr.filter(r => r.p82 >= 0.01).map(r => `${r.name.toLowerCase()} re-roll ${pct(r.p82)}`),   // a re-roll under 1% isn't a real option
+      ...(flags.trade ? [`trade ${flags.trade.out} for ${flags.trade.in}`] : []), ...(flags.primeS ? [`prime ${flags.primeS.name}`] : []),
+      ...(flags.doubleS ? [`double pick ${flags.doubleS.a} + ${flags.doubleS.b}`] : [])];
+    flags.options = options; flags.actionable = options.length > 0;
+    flags.base = top ? { p82: top.p82, rec: rec(top.avg) } : null;   // the chance without any booster, for comparison
     act.flags = flags; act.teamS = teamS;
     act.rerolls = rr.map(r => ({ name: r.name, p82: r.p82, rec: rec(r.avg), preferred: r === preferredRR }));
     // re-roll line, always visible: both options, the better one highlighted

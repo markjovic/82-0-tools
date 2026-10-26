@@ -7,7 +7,7 @@
   window.r82drv = true;
 
   // ---------- settings ----------
-  const DRIVER_VERSION = 'd15';   // shown in the status box so you can tell which driver is loaded
+  const DRIVER_VERSION = 'd17';   // shown in the status box so you can tell which driver is loaded
   const MAX_GAMES  = 100;    // stop after this many finished games (one batch; Resume starts another)
   const MAX_RESTARTS = 400;  // Wilt hunt: stop after this many abandoned drafts
   // mode: 'advice' plays every draft by the overlay's advice; 'wilt' hunts for the #1 C (Wilt Chamberlain, PHI 1960s):
@@ -483,11 +483,12 @@
     // ---- Auto alerts: stop (gold, beep) when one of these is on and true for this roll; once per roll
     if (MODE === 'advice') {
       const st = window.r820?.state || {}, f = st.flags || {}, set = window.r82settings?.() || {};
-      const hit = set.no1 && f.no1 ? `#1-ranked ${f.no1.slot} on offer: ${f.no1.name}`
+      // a #1 on offer is only worth stopping for if there's something you could do (a re-roll or a booster)
+      const hit = set.no1 && f.no1 && f.actionable ? `#1-ranked ${f.no1.slot} on offer: ${f.no1.name}`
         : set.trade && f.trade ? `trade available: ${f.trade.out} out, ${f.trade.in} in (82-0 ${Math.round(f.trade.p82 * 100)}%)`
         : set.prime && f.primeS ? `prime would make ${f.primeS.name} S-tier at ${f.primeS.slot} (#${f.primeS.rank}, ${f.primeS.from} → ${f.primeS.to})`
-        : set.double && f.doubleS ? `two S-tier players on offer for a double pick: ${f.doubleS.a} and ${f.doubleS.b}` : null;
-      if (hit && !alerted.has(seq)) { alerted.add(seq); alertStop(hit); break; }
+        : set.double && f.doubleS ? `two S-tier players on offer for a double pick: ${f.doubleS.a} and ${f.doubleS.b}${f.doubleS.p82 != null && f.base ? ` (82-0 chance ${Math.round(f.doubleS.p82 * 100)}%, ${f.doubleS.rec}, with it; ${Math.round(f.base.p82 * 100)}%, ${f.base.rec}, without)` : ''}` : null;
+      if (hit && !alerted.has(seq)) { alerted.add(seq); alertStop(hit + (f.options?.length ? ` [options: ${f.options.join('; ')}]` : '')); break; }
     }
     if (kind === 'RESTART' && MODE === 'advice' && !AUTO_QUITS) {
       const o = window.r820?.state?.otherwise;
@@ -549,7 +550,8 @@
     picks++; consecFails = 0;
     if (MODE === 'advice') { const f = window.r820?.state?.flags || {}, set = window.r82settings?.() || {};
       if (set.startS && f.startS && !alerted.has('startS|' + games + '|' + restarts)) { alerted.add('startS|' + games + '|' + restarts);
-        alertStop(`${f.startS.count} S-tier picks to start this draft: next roll is up`); break; } }
+        if (f.actionable) { alertStop(`${f.startS.count} S-tier picks to start this draft: next roll is up [options: ${f.options.join('; ')}]`); break; }
+        say(`${f.startS.count} S-tier picks to start, but no re-roll or booster to use on this roll: carrying on`); } }
   }
   }
   // ---------- recovery: fall back to the highest-value player that fits; failing that, quit and start again ----------
