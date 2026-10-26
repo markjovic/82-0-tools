@@ -9,7 +9,7 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null };
-  const VERSION = 'v42';
+  const VERSION = 'v43';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -188,7 +188,11 @@
     else if (a === 'drv-pause') { try { window.r82stop?.(); } catch (er) {} }
     else if (a === 'info') { info = !info; how = false; if (mode !== 'full') mode = 'full'; }
     else if (a === 'how') { how = !how; info = false; if (mode !== 'full') mode = 'full'; }
-    else if (a === 'off') mode = 'off';
+    else if (a === 'off') { hideFor(10000); e.stopPropagation(); return; }
+    else if (a === 'cog') { showSettings = !showSettings; if (mode !== 'full') mode = 'full'; }
+    else if (a && a.startsWith('set:')) { const k = a.slice(4); SETTINGS[k] = !SETTINGS[k]; try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(SETTINGS)); } catch (er) {} }
+    else if (a === 'drv-resume') { try { window.r82resume?.(); } catch (er) {} }
+    else if (a === 'drv-cam') { try { window.r82cam?.(); } catch (er) {} }
     else if (tapped) { tapped = false; return; }               // already handled on pointerup
     else mode = mode === 'full' ? 'min' : 'full';
     e.stopPropagation(); render();
@@ -257,10 +261,11 @@
     // Re-rolls are only worth spending to chase 82-0: never before 3 players are in place, and only while the team
     // picked so far can still reach the 82-0 score with the best remaining picks.
     const rerollOK = team.length >= 3 && reach !== null && reach >= SCORE_82;
-    const rr = !rerollOK ? [] : [['Team', clubPool, 'team'], ['Era', eraPool, 'era']].filter(([, pl, key]) => pl.length && avail(key) !== false)
+    const rr = [['Team', clubPool, 'team'], ['Era', eraPool, 'era']].filter(([, pl, key]) => pl.length && avail(key) !== false)
       .map(([name, pl, key]) => ({ name, n: pl.length, known: avail(key) === true, cost: costNote(key), ...simulate(team, { pool: pl }, SIMS) }));
     const out = reach !== null && reach < SCORE_82;
-    const better = rr.filter(r => top && r.p82 - top.p82 >= 0.03).sort((a, b) => (b.p82 - a.p82) || (b.avg - a.avg))[0];
+    const better = !rerollOK ? null : rr.filter(r => top && r.p82 - top.p82 >= 0.03).sort((a, b) => (b.p82 - a.p82) || (b.avg - a.avg))[0];
+    const preferredRR = [...rr].sort((a, b) => (b.p82 - a.p82) || (b.avg - a.avg))[0] || null;   // the better of the two, whatever the odds
 
     // Boosters (prime, trade, double pick) are rare (earned on level-up), so they are only recommended when they
     // lift the 82-0 chance by at least BOOST_GAIN and leave it at BOOST_MIN or better.
@@ -360,7 +365,37 @@
     const takeStr = t ? `${t.moves.length ? 'MOVE|' + t.moves.map(m => `${m.name}>${m.to}`).join('|') + '|' : ''}TAKE|${t.name}|${t.slot}` : '';
     act.next = act.type === 'TAKE' ? takeStr : (act.type.startsWith('REROLL') || act.type.startsWith('BOOST')) ? `${act.type}|${t.name}|${t.slot}` : act.type;
     act.open = SLOTS.filter(sl => !picks[sl]); act.p82 = (better || top)?.p82 ?? null; act.projected = top ? rec((better || top).avg) : null;
-    cache = { sig, banner: top_ + oddsHtml, opts: restart ? '' : opts, h, rec: top, act };
+    // ---- alert flags for Auto (the driver stops on whichever are switched on in settings)
+    const tierOf = (p, sl) => rankNum(p, sl);
+    const teamRanks = SLOTS.filter(sl => picks[sl]).map(sl => tierOf(picks[sl], sl));
+    const teamS = teamRanks.filter(r => r <= 10).length, teamAllS = teamRanks.length > 0 && teamS === teamRanks.length;
+    const offerNow = (cell.squad || []).filter(p => !used.has(String(p.player_id)));
+    const fitsTeam = p => feasible([...team, p]);
+    const bestSlotFor = p => (p.positions || []).filter(x => SLOTS.includes(x)).map(x => [x, tierOf(p, x)]).sort((a, b) => a[1] - b[1])[0] || null;
+    const flags = {};
+    for (const p of offerNow) { const b = bestSlotFor(p); if (b && b[1] === 1 && fitsTeam(p)) { flags.no1 = { name: p.name, slot: b[0] }; break; } }
+    if (team.length >= 2 && teamAllS) flags.startS = { count: teamS };
+    if (teamS > 0) {
+      // a trade worth stopping for swaps a non-S player out for an S-tier one from this roll
+      const slotOfPick = q => SLOTS.find(sl => picks[sl] === q);
+      const tr = boosts.filter(b => b.kind === 'TRADE' && tierOf(b.out, slotOfPick(b.out) || (b.out.positions || [])[0]) > 10 && (bestSlotFor(b.in)?.[1] ?? 999) <= 10)
+        .sort((a, b) => b.p82 - a.p82 || b.avg - a.avg)[0];
+      if (tr) flags.trade = { out: tr.out.name, in: tr.in.name, p82: tr.p82 };
+      if (bAvail('prime')) { const bs = bestStints();
+        for (const p of offerNow) { const src = p.prime || bs.get(String(p.player_id)); if (!src) continue;
+          const pp = { ...src, player_id: p.player_id, positions: src.positions?.length ? src.positions : p.positions };
+          if (val(pp) <= val(p) + 0.5 || !fitsTeam(pp)) continue;
+          const b = bestSlotFor(pp); if (b && b[1] <= 10 && !(bestSlotFor(p)?.[1] <= 10)) { flags.primeS = { name: p.name, slot: b[0], rank: b[1], from: +val(p).toFixed(1), to: +val(pp).toFixed(1) }; break; } } }
+      if (bAvail('double_pick') && team.length <= 3) {
+        const sP = offerNow.filter(p => { const b = bestSlotFor(p); return b && b[1] <= 10 && fitsTeam(p); });
+        outer: for (let i = 0; i < sP.length; i++) for (let k = i + 1; k < sP.length; k++) if (feasible([...team, sP[i], sP[k]])) { flags.doubleS = { a: sP[i].name, b: sP[k].name }; break outer; }
+      }
+    }
+    act.flags = flags; act.teamS = teamS;
+    act.rerolls = rr.map(r => ({ name: r.name, p82: r.p82, rec: rec(r.avg), preferred: r === preferredRR }));
+    // re-roll line, always visible: both options, the better one highlighted
+    const rrLine = rr.length ? `<div style="margin:0 0 5px;font-size:12px">Re-roll: ${rr.map(r => `<span style="padding:1px 6px;border-radius:4px;${r === preferredRR ? `background:${r.name === 'Era' ? '#7c3aed' : '#f59e0b'};color:${r.name === 'Era' ? '#fff' : '#1a1a1a'};font-weight:700` : 'opacity:.75'}">${r.name} ${pct(r.p82)} &middot; ${rec(r.avg)}</span>`).join(' ')}</div>` : '';
+    cache = { sig, banner: top_ + oddsHtml + rrLine, opts: restart ? '' : opts, h, rec: top, act };
     return cache;
   }
 
@@ -442,6 +477,23 @@
     return out;
   }
 
+  // ---------- settings (cog): which events make Auto stop and alert you ----------
+  const SETTINGS_KEY = 'r82settings';
+  const SETTING_DEFS = [
+    ['stop82', 'Stop on an 82-0 result'],
+    ['no1', 'Stop when a #1-ranked player is on offer'],
+    ['startS', 'After 2+ S-tier picks to start a draft, spin the next roll then stop'],
+    ['trade', 'Stop when you have an S-tier player and a trade is available'],
+    ['prime', 'Stop when you have an S-tier player and a prime would make one on offer S-tier'],
+    ['double', 'Stop when you have an S-tier player and two S-tier players are on offer (double pick)'],
+  ];
+  let SETTINGS = {}; try { SETTINGS = JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch (e) {}
+  for (const [k] of SETTING_DEFS) if (SETTINGS[k] === undefined) SETTINGS[k] = true;   // all on by default
+  window.r82settings = () => ({ ...SETTINGS });
+  let showSettings = false;
+  const settingsHtml = () => `<div style="margin:4px 0 6px;padding:6px 8px;background:rgba(255,255,255,.08);border-radius:6px"><b>Auto: stop and alert when&hellip;</b>`
+    + SETTING_DEFS.map(([k, label]) => `<div data-r82="set:${k}" style="margin-top:4px;cursor:pointer"><span style="display:inline-block;width:14px;height:14px;border:2px solid #fff;border-radius:3px;vertical-align:-3px;margin-right:6px;text-align:center;font:700 11px/12px system-ui">${SETTINGS[k] ? '&#10003;' : ''}</span>${label}</div>`).join('') + '</div>';
+
   // ---------- auto-driver controls ----------
   const DRIVER_URL = 'https://markjovic.github.io/82-0-tools/driver82.js';
   let driverLoading = false;
@@ -457,26 +509,32 @@
   const driverBar = () => {
     const st = window.r82state?.(), running = st?.running;
     const b = (act, label, on, title) => `<span data-r82="${act}" title="${title}" style="${BTN};${on ? 'background:#f59e0b;color:#1a1a1a' : ''}">${label}</span>`;
-    const what = driverLoading ? 'loading…' : running ? (st.mode === 'wilt' ? `hunting Wilt · ${st.restarts} restarts` : `auto · game ${st.games + 1}`) : st?.foundWilt ? '#1 C found: your turn' : st ? 'paused' : 'off';
-    const coins = st?.coinsGained != null ? ` · +${st.coinsGained} coins` : '';
-    return `<div style="margin:2px 0 5px;display:flex;align-items:center;gap:2px;flex-wrap:wrap"><small style="opacity:.75;margin-right:4px">Auto: ${what}${coins}</small>`
-      + b('drv-auto', '&#9654; Auto', running && st.mode === 'advice', 'Play drafts by the overlay\'s advice')
-      + b('drv-wilt', '&#127919; Wilt', running && st.mode === 'wilt', 'Hunt for the #1 C: S-grade picks only, C kept free, pauses when he appears')
-      + (running ? b('drv-pause', '&#10074;&#10074; Pause', false, 'Pause the auto-driver') : '') + '</div>';
+    const tone = st?.tone, bg = tone === 'gold' ? '#a16207' : tone === 'warn' ? '#9a3412' : tone ? '#991b1b' : 'rgba(255,255,255,.06)';
+    const counts = st ? `${st.version || ''} &middot; games ${st.games}/${st.gamesEnd ?? ''} &middot; picks ${st.picks} &middot; restarts ${st.restarts}${st.errors ? ` &middot; <b>errors ${st.errors}</b>` : ''} &middot; ${st.coinsGained == null ? 'coins ?' : `+${st.coinsGained} coins`}` : driverLoading ? 'loading&hellip;' : 'off';
+    const msg = st?.msg ? `<div style="margin-top:2px">${st.msg}</div>` : '';
+    return `<div style="margin:2px -3px 5px;padding:5px 7px;border-radius:6px;background:${bg};font-size:12px"><b>Auto</b> ${st ? (running ? (st.mode === 'wilt' ? '&middot; WILT HUNT' : '&middot; running') : st.foundWilt ? '&middot; Wilt found' : '&middot; paused') : ''} <small style="opacity:.8">${counts}</small>${msg}`
+      + `<div style="margin-top:4px;display:flex;gap:2px;flex-wrap:wrap">`
+      + b('drv-auto', '&#9654; Auto', running && st.mode === 'advice', 'Play drafts by the advice, stopping on the alerts in settings')
+      + b('drv-wilt', '&#127919; Wilt', running && st.mode === 'wilt', 'Hunt for Wilt (#1 or #2 C)')
+      + (running ? b('drv-pause', '&#10074;&#10074; Pause', false, 'Pause') : st ? b('drv-resume', 'Resume', false, 'Carry on in the current mode') : '')
+      + (st ? b('drv-cam', st.armed ? '&#128247; armed' : st.canCapture ? '&#128247; arm' : '&#128247; manual', st.armed, st.canCapture ? 'Screenshot an 82-0 result (asks to share this tab)' : 'This device can\'t capture: overlays hide on 82-0 for your own screenshot') : '')
+      + `</div></div>`;
   };
   window.r82render = () => render();
+  let hideTimer = null;
+  function hideFor(ms) { P.style.visibility = 'hidden'; clearTimeout(hideTimer); hideTimer = setTimeout(() => { P.style.visibility = ''; render(); }, ms); }
 
   function render() {
     // hidden: a small round button where the panel was, visible on 82-0's dark page; tap it to bring the panel back
     if (mode === 'off') { compute(); P.style.cssText = `position:fixed;z-index:99999;${where()};width:30px;height:30px;border-radius:50%;background:#f59e0b;border:2px solid #fff;opacity:.75;cursor:pointer;touch-action:none;box-shadow:0 2px 8px rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;font:800 11px/1 system-ui,sans-serif;color:#1a1a1a`; P.innerHTML = '82'; return; }
     P.style.cssText = CSS_() + ';cursor:pointer';
-    const ctl = `<div style="position:relative;z-index:3;float:right;margin:-2px -3px 2px 6px"><span data-r82="how" style="${BTN}${how ? ';background:rgba(255,255,255,.4)' : ''}" title="How players are valued">?</span><span data-r82="info" style="${BTN}${info ? ';background:rgba(255,255,255,.4)' : ''}" title="Details">i</span><span data-r82="off" style="${BTN}" title="Hide everything">&times;</span></div>`;
+    const ctl = `<div style="position:relative;z-index:3;float:right;margin:-2px -3px 2px 6px"><span data-r82="how" style="${BTN}${how ? ';background:rgba(255,255,255,.4)' : ''}" title="How players are valued">?</span><span data-r82="info" style="${BTN}${info ? ';background:rgba(255,255,255,.4)' : ''}" title="Details">i</span><span data-r82="cog" style="${BTN}${showSettings ? ';background:rgba(255,255,255,.4)' : ''}" title="Settings">&#9881;</span><span data-r82="off" style="${BTN}" title="Hide for 10 seconds">&times;</span></div>`;
     const { banner, body, resultRows } = compute();
     const all = Object.keys({ ...SITE, ...LOG.squads }).length, onlyLocal = Object.keys(LOG.squads).filter(k => !SITE[k]).length;
     const foot = `<br><small>${all} squads in use (${Object.keys(SITE).length} shared${onlyLocal ? `, ${onlyLocal} new on this device` : ''})${siteNote ? ' &middot; ' + esc(siteNote) : ''}<br>${LOG.games.length} games, ${Object.keys(LOG.squads).length} squads logged &middot; <span data-r82="export" style="text-decoration:underline;cursor:pointer">export log</span>${note ? ' &middot; ' + esc(note) : ''}<br>82-0 overlay ${VERSION} &middot; model from ${MODEL.GAMES} games</small>`;
     const warn = siteNote && /NOT LOADED/.test(siteNote) ? `<small style="color:#ffb74d">${esc(siteNote)}</small>` : '';
     if (mode === 'min') P.innerHTML = banner || '<b>82-0 overlay</b>';
-    else P.innerHTML = ctl + banner + driverBar() + (how ? `<div style="font-size:12px;line-height:1.45">${explain()}</div>` : info ? body + foot : (warn || (resultRows ? body : cell || result ? '' : body))) + (`<div style="font-size:10px;opacity:.55;margin-top:2px">tap to minimise &middot; drag to move &middot; ? how it works &middot; i details &middot; ${VERSION}</div>`);
+    else P.innerHTML = ctl + banner + (showSettings ? settingsHtml() : '') + driverBar() + (how ? `<div style="font-size:12px;line-height:1.45">${explain()}</div>` : info ? body + foot : (warn || (resultRows ? body : cell || result ? '' : body))) + (`<div style="font-size:10px;opacity:.55;margin-top:2px">tap to minimise &middot; drag to move &middot; &times; hides for 10s &middot; ${VERSION}</div>`);
   }
 
   const _fetch = window.fetch;

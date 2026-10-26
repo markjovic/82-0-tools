@@ -7,7 +7,7 @@
   window.r82drv = true;
 
   // ---------- settings ----------
-  const DRIVER_VERSION = 'd12';   // shown in the status box so you can tell which driver is loaded
+  const DRIVER_VERSION = 'd14';   // shown in the status box so you can tell which driver is loaded
   const MAX_GAMES  = 100;    // stop after this many finished games (one batch; Resume starts another)
   const MAX_RESTARTS = 400;  // Wilt hunt: stop after this many abandoned drafts
   // mode: 'advice' plays every draft by the overlay's advice; 'wilt' hunts for the #1 C (Wilt Chamberlain, PHI 1960s):
@@ -63,7 +63,9 @@
   window.r82stop = () => { stopped = true; say('paused by you'); };
   // controls used by the overlay's buttons
   window.r82setMode = m => { MODE = m === 'wilt' ? 'wilt' : 'advice'; finishAfterGame = false; foundWilt = false; };
-  window.r82state = () => ({ running: looping && !stopped, mode: MODE, foundWilt, games, picks, restarts, errors, coinsGained: coinStart == null ? null : coinLast - coinStart });
+  window.r82state = () => ({ running: looping && !stopped, mode: MODE, foundWilt, games, gamesEnd, picks, restarts, errors, version: DRIVER_VERSION,
+    coinsGained: coinStart == null ? null : coinLast - coinStart, msg: lastMsg, tone: lastTone, armed: !!shotStream, canCapture });
+  window.r82cam = () => { if (shotStream) takeShot('test'); else armShots(); };
   window.r82resume = () => { if (looping) return; stopped = false;
     if (games >= gamesEnd) gamesEnd = games + MAX_GAMES;
     if (restarts >= restartsEnd) restartsEnd = restarts + MAX_RESTARTS;
@@ -79,7 +81,7 @@
   const placeBox = () => { const x = boxPos ? Math.max(0, Math.min(boxPos.x, innerWidth - 40)) : 6, y = boxPos ? Math.max(0, Math.min(boxPos.y, innerHeight - 24)) : 6;
     box.style.left = x + 'px'; box.style.top = y + 'px'; };
   box.style.cssText = 'position:fixed;z-index:100000;background:#111827;color:#fff;font:12px/1.35 system-ui,sans-serif;padding:6px 8px;border-radius:6px;max-width:300px;opacity:.92;touch-action:none;user-select:none;cursor:move';
-  placeBox(); document.body.append(box);
+  placeBox(); box.style.display = 'none'; document.body.append(box);   // status now shows inside the overlay panel
   const BTN = 'margin:4px 4px 0 0;padding:2px 8px;border-radius:4px;border:0;font:700 11px system-ui,sans-serif;cursor:pointer';
   // coins: the game labels its coin counter "Coin balance N"; the run's gain is the change since the driver started
   const coinNow = () => { for (const el of document.querySelectorAll('[aria-label]')) { const m = /coin balance\s*([\d,]+)/i.exec(el.getAttribute('aria-label') || ''); if (m) return +m[1].replace(/,/g, ''); } return null; };
@@ -96,7 +98,8 @@
     box.style.padding = '6px 8px';
     box.innerHTML = `<button data-d="mini" title="Shrink" style="${BTN};float:right;margin:0 0 0 6px;padding:0 6px">&minus;</button><b>82-0 driver ${DRIVER_VERSION}</b> ${MODE === 'wilt' ? '&middot; WILT HUNT' : ''} ${DRY_RUN ? '(DRY RUN)' : ''}<br>games ${games}/${gamesEnd} &middot; picks ${picks} &middot; restarts ${restarts}${errors ? ` &middot; <b>errors ${errors}</b>` : ''} &middot; ${coinText()}<br>${lastMsg}<br>`
       + (looping && !stopped ? `<button data-d="pause" style="${BTN}">Pause</button>` : `<button data-d="resume" style="${BTN}">Resume</button>`)
-      + `<button data-d="cam" title="${shotStream ? 'Screenshots armed: an 82-0 result is saved as a picture. Click to take a test shot.' : 'Allow the driver to screenshot this tab when a game goes 82-0'}" style="${BTN}${shotStream ? ';background:#16a34a;color:#fff' : ''}">&#128247; ${shotStream ? 'armed' : 'arm'}</button>`; };
+      + (canCapture ? `<button data-d="cam" title="${shotStream ? 'Screenshots armed: an 82-0 result is saved as a picture. Click to take a test shot.' : 'Allow the driver to screenshot this tab when a game goes 82-0'}" style="${BTN}${shotStream ? ';background:#16a34a;color:#fff' : ''}">&#128247; ${shotStream ? 'armed' : 'arm'}</button>`
+                    : `<button data-d="cam" title="This device can't capture the screen: on an 82-0 the overlays hide so you can screenshot it yourself; tap anywhere to bring them back. Click to try it." style="${BTN}">&#128247; manual</button>`); };
   const say = (msg, tone) => { lastTone = tone ?? null; lastMsg = msg; persist('status', { msg: String(msg).replace(/<[^>]+>/g, ' ').slice(0, 300), games, picks, restarts }); log.push(new Date().toISOString().slice(11, 19) + ' ' + msg);
     drawBox(); console.log('[82-0 driver]', msg); try { window.r82render?.(); } catch (e) {} };
   // drag: press and move more than 6px; a press that doesn't move is a normal click
@@ -117,7 +120,21 @@
   // its "sharing this tab" bar while armed). On an 82-0 result the overlays are hidden, the game's result screen is
   // given time to finish animating, one frame is saved as a PNG download, and the overlays come back.
   let shotStream = null;
+  // Phones and tablets (Chrome on Android, Safari on iPad) don't let a page capture the screen at all. There, on an
+  // 82-0 result the driver hides every overlay so you can take the screenshot yourself; your next tap brings them back.
+  const canCapture = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+  function hideForManualShot(reason) {
+    const els = [document.getElementById('r820panel'), box, marker].filter(Boolean), was = els.map(el => el.style.visibility);
+    els.forEach(el => { el.style.visibility = 'hidden'; });
+    let done = false;
+    const restore = e => { if (done) return; done = true; if (e) { e.preventDefault(); e.stopPropagation(); }
+      els.forEach((el, i) => { el.style.visibility = was[i]; }); document.removeEventListener('pointerdown', restore, true); persist('overlays shown again'); };
+    setTimeout(() => document.addEventListener('pointerdown', restore, true), 300);   // the next tap anywhere restores them (that tap does nothing else)
+    setTimeout(() => restore(), 120000);                                             // or after 2 minutes
+    try { navigator.vibrate?.([200, 100, 200]); } catch (e) {}
+    persist('overlays hidden for a manual screenshot', { reason }); }
   async function armShots() {
+    if (!canCapture) { hideForManualShot('test'); return; }
     try {
       shotStream = await navigator.mediaDevices.getDisplayMedia({ video: { displaySurface: 'browser' }, audio: false, preferCurrentTab: true, selfBrowserSurface: 'include' });
       shotStream.getVideoTracks()[0].addEventListener('ended', () => { shotStream = null; persist('screenshots disarmed (sharing stopped)'); drawBox(); });
@@ -141,6 +158,12 @@
     } catch (e) { persist('screenshot failed', { msg: e.message }); return false; }
     finally { hide.forEach((el, i) => { el.style.visibility = was[i]; }); } }
   let looping = false, foundWilt = false;
+  const alerted = new Set();   // rolls / drafts already alerted, so Resume carries on instead of alerting again
+  function alertStop(msg) {
+    stopped = true; persist('alert', { msg });
+    say('ALERT: ' + msg + '. Your turn; Resume to let Auto carry on.', 'gold');
+    try { const ac = new AudioContext(), o = ac.createOscillator(); o.frequency.value = 880; o.connect(ac.destination); o.start(); o.stop(ac.currentTime + 0.4); } catch (e) {}
+    try { navigator.vibrate?.([200, 100, 200]); } catch (e) {} }
   // Failures: by default the driver logs the error and tries to recover (pick the highest-value player that fits,
   // or quit and start a new draft). Critical ones (safety prompts, blocked controls, overlay missing) always stop,
   // and so does a run of failed recoveries.
@@ -421,10 +444,11 @@
     if (kind === 'RESULT') {
       const key = parts.slice(1).join('|') + '|' + window.r820.seq;
       if (lastResultSeen !== key) { lastResultSeen = key; games++; sPicks = 0; say(`game ${games}: ${parts[1]} (score ${parts[2]}, model ${window.r820.state?.model})`);
-        if (/^82-0$/.test(parts[1])) {
+        if (/^82-0$/.test(parts[1]) && (window.r82settings?.().stop82 ?? true)) {
           const file = shotStream ? await takeShot('82-0') : null;
           stopped = true;
-          say(`82-0! (score ${parts[2]}) ${file ? 'Screenshot saved: ' + file : shotStream ? 'Screenshot failed; the result is still on screen.' : 'Screenshots weren\'t armed; the result is still on screen.'} Paused so you can see it.`, 'gold');
+          say(`82-0! (score ${parts[2]}) ${file ? 'Screenshot saved: ' + file : 'Overlays hidden: take your screenshot, then tap anywhere to bring them back.'} Paused so you can see it.`, 'gold');
+          if (!file) { await sleep(3500); hideForManualShot('82-0'); }   // wait for the scoreboard count-up first
           try { const ac = new AudioContext(), o = ac.createOscillator(); o.frequency.value = 880; o.connect(ac.destination); o.start(); o.stop(ac.currentTime + 0.6); } catch (e) {}
           break; }
         if (finishAfterGame) { stopped = true; say(`done: the #1 C draft finished ${parts[1]} (score ${parts[2]})`, 'gold'); break; } }
@@ -452,6 +476,15 @@
       if (sPicks >= KEEP_AFTER_S) say(`${sPicks} S-grade picks: keeping this draft and finishing it on the overlay's advice`);
       continue;
       }
+    }
+    // ---- Auto alerts: stop (gold, beep) when one of these is on and true for this roll; once per roll
+    if (MODE === 'advice') {
+      const st = window.r820?.state || {}, f = st.flags || {}, set = window.r82settings?.() || {};
+      const hit = set.no1 && f.no1 ? `#1-ranked ${f.no1.slot} on offer: ${f.no1.name}`
+        : set.trade && f.trade ? `trade available: ${f.trade.out} out, ${f.trade.in} in (82-0 ${Math.round(f.trade.p82 * 100)}%)`
+        : set.prime && f.primeS ? `prime would make ${f.primeS.name} S-tier at ${f.primeS.slot} (#${f.primeS.rank}, ${f.primeS.from} → ${f.primeS.to})`
+        : set.double && f.doubleS ? `two S-tier players on offer for a double pick: ${f.doubleS.a} and ${f.doubleS.b}` : null;
+      if (hit && !alerted.has(seq)) { alerted.add(seq); alertStop(hit); break; }
     }
     if (kind === 'RESTART' && MODE === 'advice' && !AUTO_QUITS) {
       const o = window.r820?.state?.otherwise;
@@ -511,6 +544,9 @@
       if (!(await waitSeq(seq))) { await fail(`pick of ${name} → ${slot} did not register`); break; }
     }
     picks++; consecFails = 0;
+    if (MODE === 'advice') { const f = window.r820?.state?.flags || {}, set = window.r82settings?.() || {};
+      if (set.startS && f.startS && !alerted.has('startS|' + games + '|' + restarts)) { alerted.add('startS|' + games + '|' + restarts);
+        alertStop(`${f.startS.count} S-tier picks to start this draft: next roll is up`); break; } }
   }
   }
   // ---------- recovery: fall back to the highest-value player that fits; failing that, quit and start again ----------
