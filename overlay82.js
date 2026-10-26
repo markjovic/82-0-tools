@@ -9,7 +9,7 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null };
-  const VERSION = 'v50';
+  const VERSION = 'v52';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -289,7 +289,7 @@
       const bestStint = bAvail('prime') ? bestStints() : new Map();
       const primeCands = [];
       if (bAvail('prime')) for (const p of offer) {
-        const src = p.prime || bestStint.get(String(p.player_id)); if (!src) continue;
+        const src = primeOf(p, bestStint); if (!src) continue;
         const pp = { ...src, player_id: p.player_id, positions: (src.positions && src.positions.length) ? src.positions : p.positions, primed: true };
         if (val(pp) + PRIME_BONUS <= val(p) + 0.5 || val(pp) < top.v || !feasible([...team, pp])) continue;   // only worth it if he'd beat the best normal pick
         primeCands.push({ kind: 'PRIME', p: pp, base: p, v: val(pp) }); }
@@ -392,7 +392,7 @@
         .sort((a, b) => b.p82 - a.p82 || b.avg - a.avg)[0];
       if (tr) flags.trade = { out: tr.out.name, in: tr.in.name, p82: tr.p82 };
       if (bAvail('prime')) { const bs = bestStints();
-        for (const p of offerNow) { const src = p.prime || bs.get(String(p.player_id)); if (!src) continue;
+        for (const p of offerNow) { const src = primeOf(p, bs); if (!src) continue;
           const pp = { ...src, player_id: p.player_id, positions: src.positions?.length ? src.positions : p.positions };
           if (val(pp) <= val(p) + 0.5 || !fitsTeam(pp)) continue;
           const b = bestSlotFor(pp); if (b && b[1] <= 10 && !(bestSlotFor(p)?.[1] <= 10)) { flags.primeS = { name: p.name, slot: b[0], rank: b[1], from: +val(p).toFixed(1), to: +val(pp).toFixed(1) }; break; } } }
@@ -473,6 +473,14 @@
     return { banner, body, resultRows };
   }
 
+  // A player's prime: the game names it on players it can be used on (the crown in its list). When the game sends
+  // prime details for anyone on this roll, a player without one has no prime available (e.g. Westbrook on WAS 2020s,
+  // which is already his prime), so only fall back to a guess when the game sends no prime details at all.
+  const primeOf = (p, guesses) => {
+    if (p.prime) return String(p.prime.team_id) === String(p.team_id) && p.prime.era === p.era ? null : p.prime;
+    if ((cell?.squad || []).some(x => x.prime)) return null;
+    const g = guesses.get(String(p.player_id));
+    return g && !(String(g.team_id) === String(p.team_id) && g.era === p.era) ? g : null; };
   // each player's prime stint across the known squads, used when the game hasn't named it (cached until the squad list changes)
   let BEST = null, bestN = 0;
   const primedIds = new Set();   // players primed in the current draft
@@ -585,6 +593,8 @@
           // any action that places a player counts as a pick (normal, prime, and the two picks of a double pick)
           const placed = act ? (Array.isArray(act.picks) ? act.picks : Array.isArray(act.players) ? act.players : act.player_id != null && act.slot ? [act] : []) : [];
           if (placed.length && cell) for (const e of placed) if (e && e.slot && e.player_id != null) {
+            // a trade names the drafted player it replaces: take him off the team first
+            if (e.replaces) for (const sl of SLOTS) if (picks[sl] && String(picks[sl].player_id) === String(e.replaces.player_id)) delete picks[sl];
             const p = resolvePick(e, cell);
             if (act.booster_id === 'prime') { primedIds.add(String(e.player_id)); picks[e.slot] = { ...p, primed: true }; } else picks[e.slot] = p; }
           if (act?.type && act.type !== 'pick_player') LOG.boosterSamples = [...(LOG.boosterSamples || []).slice(-19), { at: new Date().toISOString(), action: act, lineup: body?.lineup || null }];
