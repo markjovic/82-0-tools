@@ -7,7 +7,7 @@
   window.r82drv = true;
 
   // ---------- settings ----------
-  const MAX_GAMES  = 30;     // stop after this many finished games
+  const MAX_GAMES  = 100;    // stop after this many finished games (one batch; Resume starts another)
   const MAX_RESTARTS = 400;  // Wilt hunt: stop after this many abandoned drafts
   // mode: 'advice' plays every draft by the overlay's advice; 'wilt' hunts for the #1 C (Wilt Chamberlain, PHI 1960s):
   // keeps C free, takes only S-grade (top 10) players elsewhere, abandons any draft with no S-grade player on offer,
@@ -94,7 +94,8 @@
       return; }
     box.style.padding = '6px 8px';
     box.innerHTML = `<button data-d="mini" title="Shrink" style="${BTN};float:right;margin:0 0 0 6px;padding:0 6px">&minus;</button><b>82-0 driver</b> ${MODE === 'wilt' ? '&middot; WILT HUNT' : ''} ${DRY_RUN ? '(DRY RUN)' : ''}<br>games ${games}/${gamesEnd} &middot; picks ${picks} &middot; restarts ${restarts}${errors ? ` &middot; <b>errors ${errors}</b>` : ''} &middot; ${coinText()}<br>${lastMsg}<br>`
-      + (looping && !stopped ? `<button data-d="pause" style="${BTN}">Pause</button>` : `<button data-d="resume" style="${BTN}">Resume</button>`); };
+      + (looping && !stopped ? `<button data-d="pause" style="${BTN}">Pause</button>` : `<button data-d="resume" style="${BTN}">Resume</button>`)
+      + `<button data-d="cam" title="${shotStream ? 'Screenshots armed: an 82-0 result is saved as a picture. Click to take a test shot.' : 'Allow the driver to screenshot this tab when a game goes 82-0'}" style="${BTN}${shotStream ? ';background:#16a34a;color:#fff' : ''}">&#128247; ${shotStream ? 'armed' : 'arm'}</button>`; };
   const say = (msg, tone) => { lastTone = tone ?? null; lastMsg = msg; persist('status', { msg: String(msg).replace(/<[^>]+>/g, ' ').slice(0, 300), games, picks, restarts }); log.push(new Date().toISOString().slice(11, 19) + ' ' + msg);
     drawBox(); console.log('[82-0 driver]', msg); try { window.r82render?.(); } catch (e) {} };
   // drag: press and move more than 6px; a press that doesn't move is a normal click
@@ -107,7 +108,37 @@
   box.addEventListener('click', e => { if (dragged) { dragged = false; return; }
     const d = e.target.closest && e.target.closest('[data-d]'); if (!d) return;
     if (d.dataset.d === 'mini') { mini = !mini; try { localStorage.setItem('r82drvmini', mini ? '1' : '0'); } catch (er) {} drawBox(); }
+    else if (d.dataset.d === 'cam') { if (shotStream) takeShot('test'); else armShots(); }
     else if (d.dataset.d === 'pause') window.r82stop(); else window.r82resume(); });
+
+  // ---------- screenshots of an 82-0 result ----------
+  // A page can only capture the screen with your permission: "arm" asks Chrome to share this tab once (Chrome shows
+  // its "sharing this tab" bar while armed). On an 82-0 result the overlays are hidden, the game's result screen is
+  // given time to finish animating, one frame is saved as a PNG download, and the overlays come back.
+  let shotStream = null;
+  async function armShots() {
+    try {
+      shotStream = await navigator.mediaDevices.getDisplayMedia({ video: { displaySurface: 'browser' }, audio: false, preferCurrentTab: true, selfBrowserSurface: 'include' });
+      shotStream.getVideoTracks()[0].addEventListener('ended', () => { shotStream = null; persist('screenshots disarmed (sharing stopped)'); drawBox(); });
+      persist('screenshots armed'); say('screenshots armed: an 82-0 result will be saved as a picture');
+    } catch (e) { persist('screenshots not armed', { msg: e.message }); say('screenshots not armed: ' + e.message, 'warn'); }
+    drawBox(); }
+  async function takeShot(tag) {
+    if (!shotStream) return false;
+    const hide = [document.getElementById('r820panel'), box, marker].filter(Boolean), was = hide.map(el => el.style.visibility);
+    try {
+      hide.forEach(el => { el.style.visibility = 'hidden'; });
+      await sleep(tag === 'test' ? 400 : 4000);                     // let the result screen finish its count-up
+      const v = document.createElement('video'); v.muted = true; v.srcObject = shotStream; await v.play();
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const c = document.createElement('canvas'); c.width = v.videoWidth; c.height = v.videoHeight; c.getContext('2d').drawImage(v, 0, 0);
+      v.pause(); v.srcObject = null;
+      const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+      const name = `82-0-${tag}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.png`;
+      const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: name }); document.body.appendChild(a); a.click(); a.remove();
+      persist('screenshot saved', { file: name }); return name;
+    } catch (e) { persist('screenshot failed', { msg: e.message }); return false; }
+    finally { hide.forEach((el, i) => { el.style.visibility = was[i]; }); } }
   let looping = false, foundWilt = false;
   // Failures: by default the driver logs the error and tries to recover (pick the highest-value player that fits,
   // or quit and start a new draft). Critical ones (safety prompts, blocked controls, overlay missing) always stop,
@@ -389,6 +420,12 @@
     if (kind === 'RESULT') {
       const key = parts.slice(1).join('|') + '|' + window.r820.seq;
       if (lastResultSeen !== key) { lastResultSeen = key; games++; sPicks = 0; say(`game ${games}: ${parts[1]} (score ${parts[2]}, model ${window.r820.state?.model})`);
+        if (/^82-0$/.test(parts[1])) {
+          const file = shotStream ? await takeShot('82-0') : null;
+          stopped = true;
+          say(`82-0! (score ${parts[2]}) ${file ? 'Screenshot saved: ' + file : shotStream ? 'Screenshot failed; the result is still on screen.' : 'Screenshots weren\'t armed; the result is still on screen.'} Paused so you can see it.`, 'gold');
+          try { const ac = new AudioContext(), o = ac.createOscillator(); o.frequency.value = 880; o.connect(ac.destination); o.start(); o.stop(ac.currentTime + 0.6); } catch (e) {}
+          break; }
         if (finishAfterGame) { stopped = true; say(`done: the #1 C draft finished ${parts[1]} (score ${parts[2]})`, 'gold'); break; } }
       await finishGame(); await waitSeq(seq, 4000); continue;
     }
