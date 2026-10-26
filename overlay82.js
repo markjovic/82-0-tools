@@ -9,7 +9,7 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null };
-  const VERSION = 'v46';
+  const VERSION = 'v49';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -39,7 +39,11 @@
   const bpgOf = p => +(p?.stats?.bpg) || 0;
   // team score: the five player values, the team adjustment, and the blocks bend
   const blockBonus = players => MODEL.BPG_EXTRA * Math.min(players.reduce((a, p) => a + bpgOf(p), 0), MODEL.BPG_BEND);
-  const teamScore = players => MODEL.BASE + players.reduce((a, p) => a + val(p), 0) + blockBonus(players);
+  // A draft with three primes scored 138.4 where the stats the game returned give 129.7. One game can't say how a prime
+  // is scored (flat, proportional, or numbers the game doesn't show), so no bonus is assumed: PRIME_BONUS stays 0
+  // until primed games (now recorded) show what it is.
+  const PRIME_BONUS = 0;
+  const teamScore = players => MODEL.BASE + players.reduce((a, p) => a + val(p) + (p.primed ? PRIME_BONUS : 0), 0) + blockBonus(players);
   const fits = (p, s) => (p.positions || []).includes(s);
   const squads = () => Object.values({ ...SITE, ...LOG.squads }).filter(q => q.squad?.length);
   const findPlayer = e => { const q = LOG.squads[`${e.team_id}|${e.era}`] || SITE[`${e.team_id}|${e.era}`]; return q?.squad?.find(p => String(p.player_id) === String(e.player_id)) || null; };
@@ -286,8 +290,8 @@
       const primeCands = [];
       if (bAvail('prime')) for (const p of offer) {
         const src = p.prime || bestStint.get(String(p.player_id)); if (!src) continue;
-        const pp = { ...src, player_id: p.player_id, positions: (src.positions && src.positions.length) ? src.positions : p.positions };
-        if (val(pp) <= val(p) + 0.5 || val(pp) < top.v || !feasible([...team, pp])) continue;   // only worth it if he'd beat the best normal pick
+        const pp = { ...src, player_id: p.player_id, positions: (src.positions && src.positions.length) ? src.positions : p.positions, primed: true };
+        if (val(pp) + PRIME_BONUS <= val(p) + 0.5 || val(pp) < top.v || !feasible([...team, pp])) continue;   // only worth it if he'd beat the best normal pick
         primeCands.push({ kind: 'PRIME', p: pp, base: p, v: val(pp) }); }
       for (const c of primeCands.sort((a, b) => b.v - a.v).slice(0, 3)) boosts.push({ ...c, ...simulate(team, { p: c.p }, BSIMS) });
       const topOffer = offer.filter(p => feasible([...team, p])).sort((a, b) => val(b) - val(a)).slice(0, 5);
@@ -453,7 +457,7 @@
     let banner = '', body = '', resultRows = false;
     if (result) {
       const d = result.score_display?.detail || {}, roster = result.roster || [];
-      const pred = teamScore(roster.map(r => r.player));
+      const pred = teamScore(roster.map(r => ({ ...r.player, primed: (result.primedList || []).includes(String(r.player?.player_id)) })));
       resultRows = true;
       banner = BAN('#0b3d6b', '#fff', `RESULT ${esc(result.score_display?.name ?? '')}`, `Game score ${esc(result.score)} (model said ${pred.toFixed(1)}). ${esc(d.grade ?? '')} ${esc(d.grade_label ?? '')}`);
       body = roster.map(r => `${esc(r.slot)} <b>${esc(r.player?.name)}</b> &middot; ${posRank(r.player, r.slot)} &middot; ${val(r.player).toFixed(1)}`).join('<br>');
@@ -471,6 +475,7 @@
 
   // each player's highest-value stint across the known squads (cached until the squad list changes)
   let BEST = null, bestN = 0;
+  const primedIds = new Set();   // players primed in the current draft
   const bestStints = () => { const qs = squads(); if (BEST && bestN === qs.length) return BEST; BEST = new Map(); bestN = qs.length;
     for (const q of qs) for (const x of q.squad) { const k = String(x.player_id), b = BEST.get(k); if (!b || val(x) > b.v) BEST.set(k, { ...x, team: q.team, v: val(x) }); }
     return BEST; };
@@ -578,21 +583,28 @@
           }
           // any action that places a player counts as a pick (normal, prime, and the two picks of a double pick)
           const placed = act ? (Array.isArray(act.picks) ? act.picks : Array.isArray(act.players) ? act.players : act.player_id != null && act.slot ? [act] : []) : [];
-          if (placed.length && cell) for (const e of placed) if (e && e.slot && e.player_id != null) picks[e.slot] = resolvePick(e, cell);
+          if (placed.length && cell) for (const e of placed) if (e && e.slot && e.player_id != null) {
+            const p = resolvePick(e, cell);
+            if (act.booster_id === 'prime') { primedIds.add(String(e.player_id)); picks[e.slot] = { ...p, primed: true }; } else picks[e.slot] = p; }
           if (act?.type && act.type !== 'pick_player') LOG.boosterSamples = [...(LOG.boosterSamples || []).slice(-19), { at: new Date().toISOString(), action: act, lineup: body?.lineup || null }];
           const bal = j?.user?.wallet?.balances;
           if (bal && bal.coin != null) { coins = +bal.coin; LOG.lastWallet = { at: new Date().toISOString(), balances: bal }; }
           if (j?.cell) {
             cell = j.cell; result = null;
-            if (j.cell.seq === 0 && !act) { picks = {}; rerolls = { team: false, era: false }; seenStart = true; }
+            if (j.cell.seq === 0 && !act) { picks = {}; rerolls = { team: false, era: false }; seenStart = true; primedIds.clear(); }
             LOG.squads[`${cell.team?.team_id}|${cell.era}`] = { team: cell.team, era: cell.era, squad: cell.squad };
             if (cell.boosters) LOG.lastBoosters = { at: new Date().toISOString(), legal: cell.legal, boosters: cell.boosters };
           }
           if (j && j.score != null && j.roster) {
             result = j;
             LOG.games.push({ at: new Date().toISOString(), game_id: j.game_id, score: j.score, display: j.score_display, mode: j.updated_stats?.game_mode,
-              roster: j.roster.map(r => ({ slot: r.slot, player_id: r.player?.player_id, team_id: r.player?.team_id, era: r.player?.era, name: r.player?.name, positions: r.player?.positions, stats: r.player?.stats })) });
-            picks = {}; rerolls = { team: false, era: false }; seenStart = false;
+              roster: j.roster.map(r => ({ slot: r.slot, player_id: r.player?.player_id, team_id: r.player?.team_id, era: r.player?.era, name: r.player?.name, positions: r.player?.positions, stats: r.player?.stats,
+                primed: primedIds.has(String(r.player?.player_id)) || undefined,
+                // anything else the game sends about this player (to find how it marks and scores primes)
+                extra: Object.fromEntries([...Object.entries(r).filter(([k]) => !['slot', 'player'].includes(k)), ...Object.entries(r.player || {}).filter(([k]) => !['player_id', 'team_id', 'era', 'name', 'positions', 'stats', 'team'].includes(k)).map(([k, v]) => ['player.' + k, v])]) })),
+              primed: [...primedIds] });
+            result.primedList = [...primedIds];
+            picks = {}; rerolls = { team: false, era: false }; seenStart = false; primedIds.clear();
           }
           save(); render();
         } catch (e) { P.style.background = '#8b0000'; P.textContent = '82-0 overlay FAILED: ' + e.message; }
