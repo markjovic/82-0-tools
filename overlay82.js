@@ -9,7 +9,7 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null };
-  const VERSION = 'v49';
+  const VERSION = 'v50';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -473,11 +473,12 @@
     return { banner, body, resultRows };
   }
 
-  // each player's highest-value stint across the known squads (cached until the squad list changes)
+  // each player's prime stint across the known squads, used when the game hasn't named it (cached until the squad list changes)
   let BEST = null, bestN = 0;
   const primedIds = new Set();   // players primed in the current draft
   const bestStints = () => { const qs = squads(); if (BEST && bestN === qs.length) return BEST; BEST = new Map(); bestN = qs.length;
-    for (const q of qs) for (const x of q.squad) { const k = String(x.player_id), b = BEST.get(k); if (!b || val(x) > b.v) BEST.set(k, { ...x, team: q.team, v: val(x) }); }
+    // the game's prime is the player's highest-scoring stint (by points per game), not the one this model values most
+    for (const q of qs) for (const x of q.squad) { const k = String(x.player_id), b = BEST.get(k), ppg = +x.stats?.ppg || 0; if (!b || ppg > b.ppg) BEST.set(k, { ...x, team: q.team, ppg }); }
     return BEST; };
 
   // squads.json format 2 stores each squad as rows and each team once; expand it to the shape the game sends
