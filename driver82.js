@@ -7,7 +7,7 @@
   window.r82drv = true;
 
   // ---------- settings ----------
-  const DRIVER_VERSION = 'd14';   // shown in the status box so you can tell which driver is loaded
+  const DRIVER_VERSION = 'd15';   // shown in the status box so you can tell which driver is loaded
   const MAX_GAMES  = 100;    // stop after this many finished games (one batch; Resume starts another)
   const MAX_RESTARTS = 400;  // Wilt hunt: stop after this many abandoned drafts
   // mode: 'advice' plays every draft by the overlay's advice; 'wilt' hunts for the #1 C (Wilt Chamberlain, PHI 1960s):
@@ -15,7 +15,10 @@
   // and pauses for you the moment the #1 C appears.
   let MODE = window.r82mode === 'wilt' ? 'wilt' : 'advice';
   // caps apply per batch: when one is reached the driver stops, and pressing Resume / Auto / Wilt starts a new batch
-  let gamesEnd = MAX_GAMES, restartsEnd = MAX_RESTARTS;
+  // games per batch comes from the overlay's settings (default 100); between batches Auto pauses BATCH_REST_MS then carries on
+  const batchSize = () => { const n = +(window.r82settings?.().batch); return n >= 1 ? Math.round(n) : MAX_GAMES; };
+  const BATCH_REST_MS = 60000;
+  let gamesEnd = batchSize(), restartsEnd = MAX_RESTARTS;
   let finishAfterGame = false;
   // Wilt hunt: once a draft has 2 S-grade picks it is kept and played to the end on the overlay's advice (for the
   // coins), still pausing if the #1 C turns up. sPicks counts S-grade picks in the current draft.
@@ -67,7 +70,7 @@
     coinsGained: coinStart == null ? null : coinLast - coinStart, msg: lastMsg, tone: lastTone, armed: !!shotStream, canCapture });
   window.r82cam = () => { if (shotStream) takeShot('test'); else armShots(); };
   window.r82resume = () => { if (looping) return; stopped = false;
-    if (games >= gamesEnd) gamesEnd = games + MAX_GAMES;
+    if (games >= gamesEnd) gamesEnd = games + batchSize();
     if (restarts >= restartsEnd) restartsEnd = restarts + MAX_RESTARTS;
     if (foundWilt) { MODE = 'advice'; finishAfterGame = true; foundWilt = false; say('resuming: finishing this draft on the overlay\'s advice, then stopping'); }
     runLoop(); };
@@ -578,11 +581,21 @@
     while (true) {
       needRecover = null;
       await innerLoop();
+      if (!stopped && !needRecover && (games >= gamesEnd || restarts >= restartsEnd)) {
+        // end of a batch: rest for a minute (looks less like a bot, and lets any rate limit reset), then carry on
+        const what = games >= gamesEnd ? `${games} games` : `${restarts} restarts`;
+        persist('batch rest', { games, restarts });
+        for (let left = BATCH_REST_MS / 1000; left > 0 && !stopped; left -= 5) { say(`batch done (${what}): resting ${left}s, then carrying on`); await sleep(5000); }
+        if (stopped) break;
+        if (games >= gamesEnd) gamesEnd = games + batchSize();
+        if (restarts >= restartsEnd) restartsEnd = restarts + MAX_RESTARTS;
+        say('carrying on after the rest'); continue;
+      }
       if (stopped || !needRecover) break;
       const why = needRecover;
       if (!(await recover(why))) { consecFails = MAX_CONSEC_FAILS; await fail('could not recover from: ' + why); break; }
     }
-  if (!stopped) say(`batch done (${games >= gamesEnd ? MAX_GAMES + ' games' : MAX_RESTARTS + ' restarts'}): ${games} games, ${picks} picks, ${restarts} restarts so far. Press Resume for another batch.`);
+  if (!stopped) say(`stopped: ${games} games, ${picks} picks, ${restarts} restarts so far.`);
   looping = false; say(log[log.length - 1].slice(9), lastTone);   // redraw with a Resume button, same colour
   }
   if (!window.r820 || !/^v(\d+)/.test(window.r820.version || '') || +window.r820.version.slice(1) < 36) return fail('overlay v36+ not loaded (reload the page and run r820)', true);

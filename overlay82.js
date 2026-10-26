@@ -9,7 +9,7 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null };
-  const VERSION = 'v43';
+  const VERSION = 'v44';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -190,6 +190,7 @@
     else if (a === 'how') { how = !how; info = false; if (mode !== 'full') mode = 'full'; }
     else if (a === 'off') { hideFor(10000); e.stopPropagation(); return; }
     else if (a === 'cog') { showSettings = !showSettings; if (mode !== 'full') mode = 'full'; }
+    else if (a && a.startsWith('batch:')) { SETTINGS.batch = Math.max(10, Math.min(1000, (SETTINGS.batch || 100) + +a.slice(6))); try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(SETTINGS)); } catch (er) {} }
     else if (a && a.startsWith('set:')) { const k = a.slice(4); SETTINGS[k] = !SETTINGS[k]; try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(SETTINGS)); } catch (er) {} }
     else if (a === 'drv-resume') { try { window.r82resume?.(); } catch (er) {} }
     else if (a === 'drv-cam') { try { window.r82cam?.(); } catch (er) {} }
@@ -489,10 +490,12 @@
   ];
   let SETTINGS = {}; try { SETTINGS = JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch (e) {}
   for (const [k] of SETTING_DEFS) if (SETTINGS[k] === undefined) SETTINGS[k] = true;   // all on by default
+  if (!(SETTINGS.batch >= 10)) SETTINGS.batch = 100;   // games per batch; Auto rests a minute between batches
   window.r82settings = () => ({ ...SETTINGS });
   let showSettings = false;
   const settingsHtml = () => `<div style="margin:4px 0 6px;padding:6px 8px;background:rgba(255,255,255,.08);border-radius:6px"><b>Auto: stop and alert when&hellip;</b>`
-    + SETTING_DEFS.map(([k, label]) => `<div data-r82="set:${k}" style="margin-top:4px;cursor:pointer"><span style="display:inline-block;width:14px;height:14px;border:2px solid #fff;border-radius:3px;vertical-align:-3px;margin-right:6px;text-align:center;font:700 11px/12px system-ui">${SETTINGS[k] ? '&#10003;' : ''}</span>${label}</div>`).join('') + '</div>';
+    + SETTING_DEFS.map(([k, label]) => `<div data-r82="set:${k}" style="margin-top:4px;cursor:pointer"><span style="display:inline-block;width:14px;height:14px;border:2px solid #fff;border-radius:3px;vertical-align:-3px;margin-right:6px;text-align:center;font:700 11px/12px system-ui">${SETTINGS[k] ? '&#10003;' : ''}</span>${label}</div>`).join('')
+    + `<div style="margin-top:6px">Games per batch: <span data-r82="batch:-10" style="${BTN}">&minus;</span><b style="display:inline-block;min-width:34px;text-align:center">${SETTINGS.batch}</b><span data-r82="batch:10" style="${BTN}">+</span><br><small style="opacity:.8">After each batch Auto rests for a minute, then carries on.</small></div></div>`;
 
   // ---------- auto-driver controls ----------
   const DRIVER_URL = 'https://markjovic.github.io/82-0-tools/driver82.js';
