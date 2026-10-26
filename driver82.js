@@ -7,6 +7,7 @@
   window.r82drv = true;
 
   // ---------- settings ----------
+  const DRIVER_VERSION = 'd12';   // shown in the status box so you can tell which driver is loaded
   const MAX_GAMES  = 100;    // stop after this many finished games (one batch; Resume starts another)
   const MAX_RESTARTS = 400;  // Wilt hunt: stop after this many abandoned drafts
   // mode: 'advice' plays every draft by the overlay's advice; 'wilt' hunts for the #1 C (Wilt Chamberlain, PHI 1960s):
@@ -90,10 +91,10 @@
     box.style.background = lastTone === 'gold' ? '#a16207' : lastTone === 'warn' ? '#9a3412' : lastTone ? '#991b1b' : '#111827';
     const g = coinGain();
     if (mini) { box.style.padding = '3px 6px';
-      box.innerHTML = `<b>82-0</b> ${MODE === 'wilt' ? '&#127919;' : ''} G ${games} &middot; ${g == null ? '?' : '+' + g}c${errors ? ' &middot; err ' + errors : ''}${lastTone && lastTone !== 'warn' ? ' &middot; <b>' + (lastTone === 'gold' ? 'FOUND' : 'STOPPED') + '</b>' : ''} <button data-d="mini" title="Expand" style="${BTN};margin:0 0 0 4px;padding:0 6px">+</button>`;
+      box.innerHTML = `<b>82-0</b> ${MODE === 'wilt' ? '&#127919;' : ''} G ${games} &middot; ${g == null ? '?' : '+' + g}c${errors ? ' &middot; err ' + errors : ''}${lastTone && lastTone !== 'warn' ? ' &middot; <b>' + (lastTone === 'gold' ? 'FOUND' : 'STOPPED') + '</b>' : ''} <button data-d="cam" title="${shotStream ? 'Screenshots armed (click for a test shot)' : 'Arm 82-0 screenshots'}" style="${BTN};margin:0 0 0 4px;padding:0 6px${shotStream ? ';background:#16a34a;color:#fff' : ''}">&#128247;</button><button data-d="mini" title="Expand" style="${BTN};margin:0 0 0 4px;padding:0 6px">+</button>`;
       return; }
     box.style.padding = '6px 8px';
-    box.innerHTML = `<button data-d="mini" title="Shrink" style="${BTN};float:right;margin:0 0 0 6px;padding:0 6px">&minus;</button><b>82-0 driver</b> ${MODE === 'wilt' ? '&middot; WILT HUNT' : ''} ${DRY_RUN ? '(DRY RUN)' : ''}<br>games ${games}/${gamesEnd} &middot; picks ${picks} &middot; restarts ${restarts}${errors ? ` &middot; <b>errors ${errors}</b>` : ''} &middot; ${coinText()}<br>${lastMsg}<br>`
+    box.innerHTML = `<button data-d="mini" title="Shrink" style="${BTN};float:right;margin:0 0 0 6px;padding:0 6px">&minus;</button><b>82-0 driver ${DRIVER_VERSION}</b> ${MODE === 'wilt' ? '&middot; WILT HUNT' : ''} ${DRY_RUN ? '(DRY RUN)' : ''}<br>games ${games}/${gamesEnd} &middot; picks ${picks} &middot; restarts ${restarts}${errors ? ` &middot; <b>errors ${errors}</b>` : ''} &middot; ${coinText()}<br>${lastMsg}<br>`
       + (looping && !stopped ? `<button data-d="pause" style="${BTN}">Pause</button>` : `<button data-d="resume" style="${BTN}">Resume</button>`)
       + `<button data-d="cam" title="${shotStream ? 'Screenshots armed: an 82-0 result is saved as a picture. Click to take a test shot.' : 'Allow the driver to screenshot this tab when a game goes 82-0'}" style="${BTN}${shotStream ? ';background:#16a34a;color:#fff' : ''}">&#128247; ${shotStream ? 'armed' : 'arm'}</button>`; };
   const say = (msg, tone) => { lastTone = tone ?? null; lastMsg = msg; persist('status', { msg: String(msg).replace(/<[^>]+>/g, ' ').slice(0, 300), games, picks, restarts }); log.push(new Date().toISOString().slice(11, 19) + ' ' + msg);
