@@ -9,7 +9,7 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null };
-  const VERSION = 'v57';
+  const VERSION = 'v58';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -29,10 +29,28 @@
   let SITE = {}, siteNote = 'loading shared squads';
 
   // ---------- log ----------
-  const load = () => { try { return JSON.parse(localStorage.getItem(LOG_KEY)) || { games: [], squads: {}, actions: {} }; } catch (e) { return { games: [], squads: {}, actions: {} }; } };
+  // The browser allows about 5 MB per site. Squads are the bulk, so they're stored in the same compact table form as
+  // squads.json (about a third of the size) and expanded on load; the log in memory and the export are unchanged.
+  const load = () => { try { const o = JSON.parse(localStorage.getItem(LOG_KEY)) || { games: [], squads: {}, actions: {} };
+      if (o.squadsC) { o.squads = expandSquads(o.squadsC); delete o.squadsC; } o.squads ||= {}; return o; }
+    catch (e) { return { games: [], squads: {}, actions: {} }; } };
+  function compactSquads(sq) {
+    const teams = {}, out = {}, st = s => [s?.ppg ?? null, s?.rpg ?? null, s?.apg ?? null, s?.spg ?? null, s?.bpg ?? null];
+    const team = (t, era) => { if (t) teams[t.team_id + '|' + era] = [t.abbr, t.name, t.primary_color ?? null, t.secondary_color ?? null]; };
+    for (const [k, q] of Object.entries(sq || {})) { team(q.team, q.era);
+      out[k] = (q.squad || []).map(p => { const r = [String(p.player_id), p.name, (p.positions || []).join(','), ...st(p.stats)];
+        if (p.prime) { team(p.prime.team, p.prime.era); r.push([String(p.prime.team_id), p.prime.era, (p.prime.positions || []).join(','), ...st(p.prime.stats)]); }
+        return r; }); }
+    return { format: 2, teams, squads: out }; }
   let LOG = load();
   let note = '';
-  const save = () => { try { localStorage.setItem(LOG_KEY, JSON.stringify(LOG)); } catch (e) { note = 'LOG NOT SAVED: ' + e.message; } };
+  const save = () => {
+    const body = () => JSON.stringify({ ...LOG, squads: undefined, squadsC: compactSquads(LOG.squads) });
+    try { localStorage.setItem(LOG_KEY, body()); if (/^LOG NOT SAVED/.test(note)) note = ''; }
+    catch (e) {
+      // still too big: drop the small diagnostic lists (they're only samples), keep games and squads
+      LOG.recentActions = (LOG.recentActions || []).slice(-10); LOG.boosterSamples = (LOG.boosterSamples || []).slice(-5); LOG.cellSamples = (LOG.cellSamples || []).slice(-5);
+      try { localStorage.setItem(LOG_KEY, body()); note = ''; } catch (e2) { note = 'LOG NOT SAVED (storage full): export the log now so nothing is lost. ' + e2.message; } } };
 
   // ---------- model ----------
   const val = p => { const s = p?.stats || {}; return STATS.reduce((a, k) => a + MODEL[k] * (+s[k] || 0), 0) + (s.spg == null && s.bpg == null ? MODEL.NO_DEF : 0); };
@@ -645,6 +663,8 @@
           if (j?.cell) {
             cell = j.cell; result = null;
             if (j.cell.seq === 0 && !act) { picks = {}; rerolls = { team: false, era: false }; seenStart = true; primedIds.clear(); }
+            LOG.cellSamples = [...(LOG.cellSamples || []).slice(-9), { at: new Date().toISOString(), action: act?.type || null, booster: act?.booster_id || null,
+              cell: Object.fromEntries(Object.entries(cell).filter(([k]) => k !== 'squad')), top: Object.fromEntries(Object.entries(j).filter(([k]) => !['cell', 'user', 'roster'].includes(k))) }];
             { const k = `${cell.team?.team_id}|${cell.era}`; LOG.squads[k] = mergeSquad(LOG.squads[k], { team: cell.team, era: cell.era, squad: cell.squad }); LOG.squadsRev = (LOG.squadsRev || 0) + 1; }
             if (cell.boosters) LOG.lastBoosters = { at: new Date().toISOString(), legal: cell.legal, boosters: cell.boosters };
           }

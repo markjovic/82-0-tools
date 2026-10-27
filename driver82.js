@@ -7,7 +7,7 @@
   window.r82drv = true;
 
   // ---------- settings ----------
-  const DRIVER_VERSION = 'd26';   // shown in the status box so you can tell which driver is loaded
+  const DRIVER_VERSION = 'd28';   // shown in the status box so you can tell which driver is loaded
   const MAX_GAMES  = 100;    // stop after this many finished games (one batch; Resume starts another)
   const MAX_RESTARTS = 400;  // Wilt hunt: stop after this many abandoned drafts
   // mode: 'advice' plays every draft by the overlay's advice; 'wilt' hunts for the #1 C (Wilt Chamberlain, PHI 1960s):
@@ -301,6 +301,9 @@
       const sb = searchBox();
       if (sb) await typeInto(sb, name);
       cand = byName(name);
+      // After a double pick or a trade the game already knows the next roll, but its list stays empty until SPIN is
+      // pressed. Nothing has been placed yet at this point, so pressing SPIN only reveals the roll.
+      if (!cand.length && attempt === 1) { const sp = button(/^spin$/i); if (sp) { say(`${name} isn't in the list yet: pressing SPIN to reveal the roll`); await click(sp, 'SPIN (reveal)'); await sleep(1800); continue; } }
       if (!cand.length) await sleep(900);   // the list may still be filtering / animating
     }
     if (!cand.length) return fail(`player "${name}" not found in the list`);
@@ -710,8 +713,11 @@
       if (open.includes(slot) || movable(slot)) { const r = await place(o.name, slot, '#1 found: taking'); if (r) return r; }
     }
     const fixable = non1.length <= 1 && !blocker;
-    // 2. prime an offered player into a #1
-    if (fixable) for (const o of offer) { if (!o.prime) continue;
+    // 2. prime an offered player into a #1 — only while the team is clean (no non-#1s), or already has at least two
+    //    #1s with at most one non-#1 (a prime on a team that's further off is very unlikely to pay back)
+    const primeOK = !blocker && (non1.length === 0 || (ones.length >= 2 && non1.length <= 1));
+    if (!primeOK && fixable) for (const o of offer) if (o.prime && Object.values(o.prime.ranks || {}).includes(1)) { say1(`${o.name} could be primed into a #1, but with ${ones.length} #1s and ${non1.length} non-#1 the team isn't close enough to spend a prime`); break; }
+    if (primeOK) for (const o of offer) { if (!o.prime) continue;
       for (const [slot, rk] of Object.entries(o.prime.ranks || {})) {
         if (rk !== 1 || !(open.includes(slot) || movable(slot))) continue;
         if (last && ones.length !== 4) continue;                       // pick 5: only if it completes the perfect team
