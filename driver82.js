@@ -7,7 +7,7 @@
   window.r82drv = true;
 
   // ---------- settings ----------
-  const DRIVER_VERSION = 'd22';   // shown in the status box so you can tell which driver is loaded
+  const DRIVER_VERSION = 'd23';   // shown in the status box so you can tell which driver is loaded
   const MAX_GAMES  = 100;    // stop after this many finished games (one batch; Resume starts another)
   const MAX_RESTARTS = 400;  // Wilt hunt: stop after this many abandoned drafts
   // mode: 'advice' plays every draft by the overlay's advice; 'wilt' hunts for the #1 C (Wilt Chamberlain, PHI 1960s):
@@ -203,6 +203,9 @@
     // hard block: never press boosters, re-rolls, sharing, account or ad controls, whatever the logic above decided
     const label = ((el.getAttribute && el.getAttribute('aria-label')) || '') + ' ' + txt(el);
     // (the one exception: a deliberate free/owned re-roll on the final pick in Auto, which passes allowRespin)
+    if (opts.allowBooster && typeof opts.allowBooster === 'string') {
+      const others = ['double', 'trade', 'prime'].filter(k => !new RegExp(k, 'i').test(opts.allowBooster));
+      if (new RegExp(others.join('|'), 'i').test(label)) { await fail(`refused to press "${label.trim().slice(0, 40)}" while using ${opts.allowBooster}`, true); return false; } }
     const blocked = opts.allowBooster ? /share results|sign out|watch|\bx2\b|rewarded|profile|settings|leaderboard|menu/i : opts.allowCoins ? /double pick|\btrade\b|\bprime\b|booster|share results|sign out|watch|\bx2\b|rewarded|profile|settings|leaderboard|challenges|my stats|how to play|get the app|download|edit name|copy user id|socials|menu/i
                   : opts.allowRespin ? /double pick|\btrade\b|\bprime\b|booster|share results|sign out|watch|\bx2\b|rewarded|profile|settings|leaderboard|challenges|my stats|how to play|get the app|download|edit name|copy user id|socials|menu|coin balance/i
                                      : /double pick|\btrade\b|\bprime\b|respin|booster|share results|sign out|watch|\bx2\b|rewarded|coin balance|profile|settings|leaderboard|challenges|my stats|how to play|get the app|download|edit name|copy user id|socials|menu/i;
@@ -577,7 +580,10 @@
     const dlg = [...document.querySelectorAll('[role=dialog],[aria-modal=true]')].filter(x => !ours(x) && visible(x));
     const pool = (dlg.length ? dlg.flatMap(x => [...x.querySelectorAll('button,[role=button]')]) : [...document.querySelectorAll('button,[role=button]')])
       .filter(b => !ours(b) && visible(b) && !/coin balance/i.test(b.getAttribute('aria-label') || ''));
-    return pool.find(b => /^\d[\d,]*$/.test(txt(b).replace(/\s+/g, ''))) || pool.find(b => /\b(buy|confirm|purchase|spend)\b/i.test(txt(b)) && !/cancel|close|watch|\bad\b|video/i.test(txt(b))) || null; };
+    const isBooster = b => /double|trade|prime|respin|booster/i.test(b.getAttribute('aria-label') || '');
+    const price = b => +txt(b).replace(/[\s,]/g, '');
+    return pool.find(b => /^\d[\d,]*$/.test(txt(b).replace(/\s+/g, '')) && price(b) >= 50 && !isBooster(b) && b.getBoundingClientRect().width >= 100)
+      || pool.find(b => /\b(buy|confirm|purchase|spend)\b/i.test(txt(b)) && !isBooster(b) && !/cancel|close|watch|\bad\b|video/i.test(txt(b))) || null; };
   const PRICES = { prime: 250, respin_team: 100, respin_era: 100 };   // trade's price isn't known yet: read from the panel
   const canUse = (key, coins) => { const b = window.r820?.state?.boosters?.[key];
     if (!b || b.enabled === false) return null;
@@ -594,17 +600,17 @@
     const findBtn = () => byText(new RegExp('^' + label + '$', 'i')).map(el => el.closest('button,[role=button]') || el)[0]
       || [...document.querySelectorAll('button,[role=button]')].find(b => !ours(b) && visible(b) && new RegExp('\\b' + label + '\\b', 'i').test(b.getAttribute('aria-label') || '')) || null;
     let btn = findBtn(); if (!btn) return fail(`${label} button not found`, true);
-    await click(btn, label, { allowBooster: true }); await sleep(900);
+    await click(btn, label, { allowBooster: label }); await sleep(900);
     if (/^buy/.test(how)) {
       const buy = await waitFor(findBuyButton, `the ${label} purchase panel`);
       if (!buy) return fail(`pressed ${label} to buy one but found no price button`, true);
       const price = +txt(buy).replace(/[^\d]/g, '') || null, coins = window.r820?.state?.coins;
       if (price && coins != null && price > coins) return fail(`${label} costs ${price}, you have ${coins} coins`, true);
       persist('purchase', { item: label, price });
-      await click(buy, `buy ${label} for ${price ?? '?'} coins`, { allowBooster: true, allowCoins: true }); await sleep(1200);
+      await click(buy, `buy ${label} for ${price ?? '?'} coins`, { allowBooster: label, allowCoins: true }); await sleep(1200);
       // if buying doesn't open the selection screen by itself, press the booster again (now that one is held)
       if (!byText(screenRe)[0]) { const x = byLabel(/^close$/i); if (x && [...document.querySelectorAll('[role=dialog],[aria-modal=true]')].some(d => visible(d) && d.contains(x))) { await click(x, 'close purchase panel'); await sleep(500); }
-        btn = findBtn(); if (btn) { await click(btn, label + ' (after buying)', { allowBooster: true }); await sleep(900); } }
+        btn = findBtn(); if (btn) { await click(btn, label + ' (after buying)', { allowBooster: label }); await sleep(900); } }
     }
     if (!(await waitFor(() => byText(screenRe)[0] || null, `the ${label} screen`))) return fail(`${label}: its selection screen didn't appear`, true);
     return true; }
@@ -685,7 +691,7 @@
         say1(`priming ${o.name} (${o.prime.abbr} ${o.prime.era}) into the #1 ${slot} [${how}]`, 'warn'); persist('booster', { kind: 'prime', player: o.name, slot, how });
         if (!(await startBooster('PRIME', how, /choose a player to prime/i))) return 'break';
         const row = byName(o.name)[0]; if (!row) { await fail(`prime: ${o.name} not found on the prime screen`, true); return 'break'; }
-        await click(row, `prime ${o.name}`, { allowBooster: true }); await sleep(COURT_MS);
+        await click(row, `prime ${o.name}`, { allowBooster: 'PRIME' }); await sleep(COURT_MS);
         if (last && ones.length === 4) expectPerfect = true;
         const sEl = slotEl(slot); if (!sEl) { await fail(`prime: court position ${slot} not found`, true); return 'break'; }
         await click(sEl, `${slot} for primed ${o.name}`);
@@ -703,7 +709,7 @@
       say1(`trading ${occ.name} out for #1 ${o.name} at ${slot} [${how}]`, 'warn'); persist('booster', { kind: 'trade', in: o.name, out: occ.name, slot, how });
       if (!(await startBooster('TRADE', how, /trade/i))) return 'break';
       const row = byName(o.name)[0]; if (!row) { await fail(`trade: ${o.name} not found on the trade screen`, true); return 'break'; }
-      await click(row, `trade in ${o.name}`, { allowBooster: true }); await sleep(COURT_MS);
+      await click(row, `trade in ${o.name}`, { allowBooster: 'TRADE' }); await sleep(COURT_MS);
       const sEl = slotEl(slot); if (!sEl) { await fail(`trade: court position ${slot} not found`, true); return 'break'; }
       await click(sEl, `${occ.name} out at ${slot}`);
       if (!(await waitSeq(seq))) { await fail(`trade of ${o.name} for ${occ.name} did not register`, true); return 'break'; }
