@@ -7,7 +7,7 @@
   window.r82drv = true;
 
   // ---------- settings ----------
-  const DRIVER_VERSION = 'd19';   // shown in the status box so you can tell which driver is loaded
+  const DRIVER_VERSION = 'd21';   // shown in the status box so you can tell which driver is loaded
   const MAX_GAMES  = 100;    // stop after this many finished games (one batch; Resume starts another)
   const MAX_RESTARTS = 400;  // Wilt hunt: stop after this many abandoned drafts
   // mode: 'advice' plays every draft by the overlay's advice; 'wilt' hunts for the #1 C (Wilt Chamberlain, PHI 1960s):
@@ -616,6 +616,21 @@
     const ones = picked.filter(r => r.rank === 1), non1 = picked.filter(r => r.rank !== 1);
     const last = picked.length === 4;
     const say1 = m => say('perfect hunt: ' + m);
+    // Which re-roll can actually reach the #1s needed? A team re-roll keeps the era, an era re-roll keeps the club, so
+    // from the wrong club AND the wrong era one re-roll can never land the target: it takes era-then-team (two
+    // re-rolls, and only if this club existed in the target era). Odds come from the overlay (huntOdds).
+    const affordableRR = sc => { const b = (st.boosters || {})['respin_' + sc] || {};
+      if ((+b.used_in_draft || 0) >= (+b.max_per_draft || Infinity)) return false;
+      return (+b.free_left || 0) > 0 || (+b.owned_left || 0) > 0 || b.next_use === 'free' || b.next_use === 'owned' || (b.next_use === 'coins' && coins != null && coins >= 100); };
+    const chooseReroll = slots => { const od = st.huntOdds || {}, sum = k => slots.reduce((a, sl) => a + ((od[sl] || {})[k] || 0), 0);
+      const opts = [['team', sum('team')], ['era', sum('era')]].filter(([sc, p]) => p > 0 && affordableRR(sc)).sort((a, b) => b[1] - a[1]);
+      if (opts.length) return { scope: opts[0][0], p: opts[0][1] };
+      if (sum('eraTeam') > 0 && affordableRR('era') && affordableRR('team')) return { scope: 'era', p: sum('eraTeam'), twoStep: true };
+      return null; };
+    const huntReroll = async (slots, why) => { const c = chooseReroll(slots);
+      if (!c) { say1(`${why}: no re-roll can reach ${slots.map(sl => (st.targets || {})[sl]?.name || '#1 ' + sl).join(' / ')} from ${st.club} ${st.era} (or none left)`); return null; }
+      say1(`${why}: re-rolling ${c.scope} (${Math.round(c.p * 100)}% chance${c.twoStep ? ' over era-then-team' : ''}) for ${slots.map(sl => (st.targets || {})[sl]?.name || '#1 ' + sl).join(' / ')}`);
+      const r = await rerollNow(c.scope); return r === true ? 'done' : stopped ? 'break' : null; };
     // a non-#1 sitting in a slot can step aside if he can play another open slot
     const movable = slot => { const occ = picked.find(r => r.slot === slot); if (!occ) return null; if (occ.rank === 1) return false;
       const to = (occ.positions || []).find(x => open.includes(x)); return to || false; };
@@ -645,8 +660,9 @@
       for (const [slot, rk] of Object.entries(o.prime.ranks || {})) {
         if (rk !== 1 || !(open.includes(slot) || movable(slot))) continue;
         if (last && ones.length !== 4) continue;                       // pick 5: only if it completes the perfect team
-        if (non1.length === 1 && !last && !canUse('trade', coins)) continue;   // the remaining non-#1 could never be traded out
-        const how = canUse('prime', coins); if (!how) { say1(`prime would make ${o.name} the #1 ${slot}, but no prime is available (${coins ?? '?'} coins)`); continue; }
+        const how = canUse('prime', coins);
+        if (!how) { const b = (st.boosters || {}).prime || {}; say1(`prime would make ${o.name} the #1 ${slot}, but none can be used (owned ${b.owned_left ?? '?'}, game says "${b.next_use ?? '?'}")`, 'warn');
+          persist('prime missed', { player: o.name, slot, booster: b }); continue; }
         const mv = movable(slot);
         if (mv) { const occ = picked.find(r => r.slot === slot); if (!(await movePlayer(occ.name, mv))) return 'break'; }
         say1(`priming ${o.name} (${o.prime.abbr} ${o.prime.era}) into the #1 ${slot} [${how}]`, 'warn'); persist('booster', { kind: 'prime', player: o.name, slot, how });
@@ -682,25 +698,20 @@
     }
     // 3b. holding the fifth pick for a trade: re-roll towards the #1 who'd replace the non-#1
     if (holdForTrade) {
-      const nslot = non1[0].slot, tgt = (st.targets || {})[nslot];
-      const scopes = tgt && st.era === tgt.era ? ['team', 'era'] : tgt && st.clubId === tgt.team_id ? ['era', 'team'] : ['team', 'era'];
-      for (const sc of scopes) { const b = (st.boosters || {})['respin_' + sc] || {};
-        const affordable = (+b.free_left || 0) > 0 || (+b.owned_left || 0) > 0 || b.next_use === 'free' || b.next_use === 'owned' || (b.next_use === 'coins' && coins != null && coins >= 100);
-        if (!affordable) continue;
-        say1(`three #1s + ${non1[0].name}: holding the last pick, re-rolling ${sc} for ${tgt ? tgt.name + ' (' + tgt.abbr + ' ' + tgt.era + ')' : 'the #1 ' + nslot} to trade in`, 'warn');
-        const r = await rerollNow(sc); if (r === true) return 'done'; if (r === false && stopped) return 'break'; }
-      say1(`three #1s + ${non1[0].name}, but no re-rolls or coins left: finishing the draft normally`);
+      const r = await huntReroll([non1[0].slot], `three #1s + ${non1[0].name}, holding the last pick to trade him out`);
+      if (r) return r;
+      say1('finishing the draft normally');
     }
     // 4. four #1s and one gap: re-roll towards the missing #1's squad while re-rolls or coins allow
     if (last && ones.length === 4) {
-      const gap = open[0], tgt = (st.targets || {})[gap];
-      const scopes = tgt && st.era === tgt.era ? ['team', 'era'] : tgt && st.clubId === tgt.team_id ? ['era', 'team'] : ['team', 'era'];
-      for (const sc of scopes) { const b = (st.boosters || {})['respin_' + sc] || {};
-        const affordable = (+b.free_left || 0) > 0 || (+b.owned_left || 0) > 0 || b.next_use === 'free' || b.next_use === 'owned' || (b.next_use === 'coins' && coins != null && coins >= 100);
-        if (!affordable) continue;
-        say1(`four #1s: re-rolling ${sc} to find ${tgt ? tgt.name + ' (' + tgt.abbr + ' ' + tgt.era + ')' : 'the #1 ' + gap}`, 'warn');
-        const r = await rerollNow(sc); if (r === true) return 'done'; if (r === false && stopped) return 'break'; }
-      say1(`four #1s but no re-rolls or coins left for the #1 ${gap}: finishing the draft normally`);
+      const r = await huntReroll([open[0]], 'four #1s');
+      if (r) return r;
+      say1('finishing the draft normally');
+    }
+    // 5. three #1s and two gaps (none wasted): hunting starts here. Re-roll towards either missing #1.
+    if (picked.length === 3 && ones.length === 3) {
+      const r = await huntReroll(open, 'three #1s');
+      if (r) return r;
     }
     return 'normal';   // nothing for the hunt on this roll: draft normally (collects coins)
   }
