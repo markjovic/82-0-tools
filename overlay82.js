@@ -9,7 +9,7 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null };
-  const VERSION = 'v56';
+  const VERSION = 'v57';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -45,8 +45,19 @@
   const PRIME_BONUS = 0;
   const teamScore = players => MODEL.BASE + players.reduce((a, p) => a + val(p) + (p.primed ? PRIME_BONUS : 0), 0) + blockBonus(players);
   const fits = (p, s) => (p.positions || []).includes(s);
-  const squads = () => Object.values({ ...SITE, ...LOG.squads }).filter(q => q.squad?.length);
-  const findPlayer = e => { const q = LOG.squads[`${e.team_id}|${e.era}`] || SITE[`${e.team_id}|${e.era}`]; return q?.squad?.find(p => String(p.player_id) === String(e.player_id)) || null; };
+  // A roll doesn't always list every player in that squad (the game leaves some out, e.g. Jordan from CHI 1980s once
+  // he's been used elsewhere), so squads are merged player by player, never replaced: this device's version of a
+  // player wins, but players only the shared list knows are kept.
+  const mergeSquad = (a, b) => { if (!a) return b; if (!b) return a;
+    const byId = new Map(a.squad.map(p => [String(p.player_id), p])); for (const p of b.squad) byId.set(String(p.player_id), p);
+    return { ...a, ...b, squad: [...byId.values()] }; };
+  let SQ = null, sqSig = '';
+  const squads = () => { const sig = Object.keys(SITE).length + ':' + Object.keys(LOG.squads || {}).length + ':' + (LOG.squadsRev || 0);
+    if (SQ && sig === sqSig) return SQ;
+    const all = { ...SITE }; for (const [k, q] of Object.entries(LOG.squads || {})) all[k] = mergeSquad(all[k], q);
+    SQ = Object.values(all).filter(q => q.squad?.length); sqSig = sig; return SQ; };
+  const findPlayer = e => { const k = `${e.team_id}|${e.era}`, id = String(e.player_id);
+    return LOG.squads[k]?.squad?.find(p => String(p.player_id) === id) || SITE[k]?.squad?.find(p => String(p.player_id) === id) || null; };
   // Work out which player a pick or lineup entry is. A prime pick names the player's prime stint (a different club,
   // sometimes a different era) rather than the club on offer, so look in the right places in turn.
   const resolvePick = (e, cellNow) => {
@@ -82,7 +93,9 @@
   // counted once). Exact rank inside the top 25, a band beyond that.
   let RANKS = null, ranksN = 0;
   const posRank = (p, sl) => { const qs = squads();
-    if (!RANKS || ranksN !== qs.length) { RANKS = {}; ranksN = qs.length;
+    // rebuild whenever the squad list changes in any way (count alone can stay the same when the shared list
+    // arrives after this device's own log, which left the ranks built from the device's squads only)
+    if (!RANKS || ranksN !== sqSig) { RANKS = {}; ranksN = sqSig;
       for (const x of SLOTS) RANKS[x] = [...new Map(qs.flatMap(q => q.squad).filter(q => fits(q, x)).map(q => [String(q.player_id) + '|' + q.team_id + '|' + q.era, val(q)])).values()].sort((a, b) => b - a); }
     const v = val(p), r = RANKS[sl].filter(x => x > v + 1e-9).length + 1;
     return `#${r} ${sl}`; };
@@ -512,7 +525,7 @@
   // each player's prime stint across the known squads, used when the game hasn't named it (cached until the squad list changes)
   let BEST = null, bestN = 0;
   const primedIds = new Set();   // players primed in the current draft
-  const bestStints = () => { const qs = squads(); if (BEST && bestN === qs.length) return BEST; BEST = new Map(); bestN = qs.length;
+  const bestStints = () => { const qs = squads(); if (BEST && bestN === sqSig) return BEST; BEST = new Map(); bestN = sqSig;
     // the game's prime is the player's highest-scoring stint (by points per game), not the one this model values most
     for (const q of qs) for (const x of q.squad) { const k = String(x.player_id), b = BEST.get(k), ppg = +x.stats?.ppg || 0; if (!b || ppg > b.ppg) BEST.set(k, { ...x, team: q.team, ppg }); }
     return BEST; };
@@ -632,7 +645,7 @@
           if (j?.cell) {
             cell = j.cell; result = null;
             if (j.cell.seq === 0 && !act) { picks = {}; rerolls = { team: false, era: false }; seenStart = true; primedIds.clear(); }
-            LOG.squads[`${cell.team?.team_id}|${cell.era}`] = { team: cell.team, era: cell.era, squad: cell.squad };
+            { const k = `${cell.team?.team_id}|${cell.era}`; LOG.squads[k] = mergeSquad(LOG.squads[k], { team: cell.team, era: cell.era, squad: cell.squad }); LOG.squadsRev = (LOG.squadsRev || 0) + 1; }
             if (cell.boosters) LOG.lastBoosters = { at: new Date().toISOString(), legal: cell.legal, boosters: cell.boosters };
           }
           if (j && j.score != null && j.roster) {
