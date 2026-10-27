@@ -7,7 +7,7 @@
   window.r82drv = true;
 
   // ---------- settings ----------
-  const DRIVER_VERSION = 'd23';   // shown in the status box so you can tell which driver is loaded
+  const DRIVER_VERSION = 'd26';   // shown in the status box so you can tell which driver is loaded
   const MAX_GAMES  = 100;    // stop after this many finished games (one batch; Resume starts another)
   const MAX_RESTARTS = 400;  // Wilt hunt: stop after this many abandoned drafts
   // mode: 'advice' plays every draft by the overlay's advice; 'wilt' hunts for the #1 C (Wilt Chamberlain, PHI 1960s):
@@ -470,6 +470,20 @@
     }
     if (MODE === 'wilt') {
       const st = window.r820.state || {}, offer = st.offer || [], open = st.open || [];
+      // Wilt on offer in a lesser stint (PHI or LAL) whose prime is the #1 C: prime him and take him at C, then pause
+      const primeWilt = open.includes('C') && offer.find(p => p.prime && p.prime.ranks && p.prime.ranks.C === 1 && !(p.ranks && p.ranks.C === 1));
+      if (primeWilt) { const how = canUse('prime', st.coins);
+        if (how) {
+          say(`Wilt hunt: priming ${primeWilt.name} (${primeWilt.prime.abbr} ${primeWilt.prime.era}) into the #1 C [${how}]`, 'warn');
+          persist('booster', { kind: 'prime', player: primeWilt.name, slot: 'C', how, mode: 'wilt' });
+          const last = (st.picked || []).length === 4;
+          if (!(await primeInto(primeWilt.name, 'C', how, last, seq))) break;
+          picks++; foundWilt = true; stopped = true;
+          say(`FOUND: ${primeWilt.name} primed into the #1 C and drafted. Your turn. Press Resume to let it finish this draft on the overlay's advice.`, 'gold');
+          try { const ac = new AudioContext(), o = ac.createOscillator(); o.frequency.value = 880; o.connect(ac.destination); o.start(); o.stop(ac.currentTime + 0.4); } catch (e) {}
+          break; }
+        const b = (st.boosters || {}).prime || {};
+        say(`Wilt hunt: ${primeWilt.name} could be primed into the #1 C, but no prime can be used (owned ${b.owned_left ?? '?'}, ${st.coins ?? '?'} coins)`, 'warn'); }
       const wilt = offer.filter(p => p.ranks && p.ranks.C <= HUNT_TOP_C).sort((a, b) => a.ranks.C - b.ranks.C)[0];
       if (wilt) { foundWilt = true; stopped = true;
         say(`FOUND the #${wilt.ranks.C} C: ${wilt.name} ${st.club} ${st.era} (value ${wilt.value}). Your turn. Press Resume to let it finish this draft on the overlay's advice.`, 'gold');
@@ -576,8 +590,11 @@
   const boosterCost = b => b == null ? null : +(b.cost ?? b.price ?? b.coin_cost ?? b.coins ?? NaN);
   // the purchase panel's button is just the price ("250" with a coin icon); find it inside a dialog if there is one,
   // otherwise any visible button whose whole text is a number (never the coin counter)
-  const findBuyButton = () => {
-    const dlg = [...document.querySelectorAll('[role=dialog],[aria-modal=true]')].filter(x => !ours(x) && visible(x));
+  // Several panels count as dialogs at once (the account menu, the player list, the purchase panel), so look in the
+  // one whose text names what's being bought (e.g. "PRIME x1 250") first.
+  const findBuyButton = (what) => {
+    let dlg = [...document.querySelectorAll('[role=dialog],[aria-modal=true]')].filter(x => !ours(x) && visible(x));
+    if (what) { const named = dlg.filter(x => new RegExp('\\b' + what + '\\b', 'i').test(txt(x)) && txt(x).length < 80); if (named.length) dlg = named; }
     const pool = (dlg.length ? dlg.flatMap(x => [...x.querySelectorAll('button,[role=button]')]) : [...document.querySelectorAll('button,[role=button]')])
       .filter(b => !ours(b) && visible(b) && !/coin balance/i.test(b.getAttribute('aria-label') || ''));
     const isBooster = b => /double|trade|prime|respin|booster/i.test(b.getAttribute('aria-label') || '');
@@ -602,7 +619,7 @@
     let btn = findBtn(); if (!btn) return fail(`${label} button not found`, true);
     await click(btn, label, { allowBooster: label }); await sleep(900);
     if (/^buy/.test(how)) {
-      const buy = await waitFor(findBuyButton, `the ${label} purchase panel`);
+      const buy = await waitFor(() => findBuyButton(label), `the ${label} purchase panel`);
       if (!buy) return fail(`pressed ${label} to buy one but found no price button`, true);
       const price = +txt(buy).replace(/[^\d]/g, '') || null, coins = window.r820?.state?.coins;
       if (price && coins != null && price > coins) return fail(`${label} costs ${price}, you have ${coins} coins`, true);
@@ -613,6 +630,16 @@
         btn = findBtn(); if (btn) { await click(btn, label + ' (after buying)', { allowBooster: label }); await sleep(900); } }
     }
     if (!(await waitFor(() => byText(screenRe)[0] || null, `the ${label} screen`))) return fail(`${label}: its selection screen didn't appear`, true);
+    return true; }
+  // prime a player on this roll and place him: open prime (buying one if needed), choose him, place him, send the pick
+  async function primeInto(name, slot, how, last, seq) {
+    if (!(await startBooster('PRIME', how, /choose a player to prime/i))) return false;
+    const row = byName(name)[0]; if (!row) return fail(`prime: ${name} not found on the prime screen`, true);
+    await click(row, `prime ${name}`, { allowBooster: 'PRIME' }); await sleep(COURT_MS);
+    const sEl = slotEl(slot); if (!sEl) return fail(`prime: court position ${slot} not found`, true);
+    await click(sEl, `${slot} for primed ${name}`);
+    if (!last && !(await spin(false))) return fail('primed and placed, but found no SPIN button');
+    if (!(await waitSeq(seq))) return fail(`primed pick of ${name} did not register`, true);
     return true; }
   async function rerollNow(scope) {
     const btn = byLabel(new RegExp('^respin ' + scope, 'i'));
@@ -667,17 +694,22 @@
       if (!last && !(await spin(false))) { await fail('placed the player but found no SPIN button'); return 'break'; }
       if (!(await waitSeq(seq))) { await fail(`pick of ${name} → ${slot} did not register`); return 'break'; }
       picks++; consecFails = 0; return 'done'; };
+    // A player can only be in the team once (the game leaves him out of later rolls once he's drafted, in any stint).
+    // So a target player sitting in the team in a non-#1 stint blocks his own #1 for good: no roll will offer it and
+    // no trade can bring it in. That makes the perfect team impossible.
+    const targetNames = Object.values(st.targets || {}).filter(Boolean).map(t => t.name);
+    const blocker = non1.find(r => targetNames.includes(r.name));
     // With four players placed, three #1s and one non-#1, placing anyone ends the draft short of perfect. If a trade
     // is available, hold the fifth pick: trade the non-#1 out when his #1 turns up, re-rolling to find him.
     const tradeHow = canUse('trade', coins);
-    const holdForTrade = last && ones.length === 3 && non1.length === 1 && !!tradeHow;
+    const holdForTrade = last && ones.length === 3 && non1.length === 1 && !!tradeHow && !targetNames.includes(non1[0].name);
     // 1. a #1 on offer, at his #1 position (open, or held by a non-#1 who can move)
     for (const o of offer) for (const [slot, rk] of Object.entries(o.ranks || {})) {
       if (rk !== 1) continue;
       if (last && ones.length !== 4 && holdForTrade) continue;   // placing him would end the draft at four #1s
       if (open.includes(slot) || movable(slot)) { const r = await place(o.name, slot, '#1 found: taking'); if (r) return r; }
     }
-    const fixable = non1.length <= 1;
+    const fixable = non1.length <= 1 && !blocker;
     // 2. prime an offered player into a #1
     if (fixable) for (const o of offer) { if (!o.prime) continue;
       for (const [slot, rk] of Object.entries(o.prime.ranks || {})) {
@@ -735,6 +767,18 @@
     if (picked.length === 3 && ones.length === 3) {
       const r = await huntReroll(open, 'three #1s');
       if (r) return r;
+    }
+    if (blocker && !alerted.has('blocked|' + games)) { alerted.add('blocked|' + games); say1(`${blocker.name} is in the team as a non-#1 (${blocker.slot} #${blocker.rank}), so his #1 stint can never be added: no perfect team this draft`); }
+    // While the hunt is still alive, don't spend a target player on a lesser stint: he could only ever be drafted
+    // once, so taking him now (unprimed) would block his #1 for the rest of the draft. Take the best other player.
+    if (fixable && !blocker) {
+      const adv = (kind === 'TAKE' ? { name: (window.r820.next || '').split('|')[1] } : st.otherwise) || {};
+      if (adv.name && targetNames.includes(adv.name)) {
+        const alt = offer.filter(o => !targetNames.includes(o.name))
+          .map(o => { const sl = Object.entries(o.ranks || {}).filter(([x]) => open.includes(x)).sort((a, b) => a[1] - b[1])[0]; return sl ? { name: o.name, slot: sl[0], v: o.value } : null; })
+          .filter(Boolean).sort((a, b) => b.v - a.v)[0];
+        if (alt) { const r = await place(alt.name, alt.slot, `keeping ${adv.name} free for his #1 stint: taking`); if (r) return r; }
+      }
     }
     return 'normal';   // nothing for the hunt on this roll: draft normally (collects coins)
   }
