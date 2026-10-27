@@ -9,7 +9,7 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null };
-  const VERSION = 'v52';
+  const VERSION = 'v54';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -188,7 +188,7 @@
     const m = e.target.closest && e.target.closest('[data-r82]');
     const a = m ? m.getAttribute('data-r82') : null;
     if (a === 'export') exportLog();
-    else if (a === 'drv-auto' || a === 'drv-wilt') driverGo(a === 'drv-wilt' ? 'wilt' : 'advice');
+    else if (a === 'drv-auto' || a === 'drv-wilt' || a === 'drv-perfect') driverGo(a === 'drv-wilt' ? 'wilt' : a === 'drv-perfect' ? 'perfect' : 'advice');
     else if (a === 'drv-pause') { try { window.r82stop?.(); } catch (er) {} }
     else if (a === 'info') { info = !info; how = false; if (mode !== 'full') mode = 'full'; }
     else if (a === 'how') { how = !how; info = false; if (mode !== 'full') mode = 'full'; }
@@ -467,7 +467,18 @@
       const usedIds = new Set(SLOTS.filter(sl => picks[sl]).map(sl => String(picks[sl].player_id)));
       const offer = (cell.squad || []).filter(p => !usedIds.has(String(p.player_id))).map(p => ({ name: p.name, positions: p.positions, value: +val(p).toFixed(2),
         ranks: Object.fromEntries((p.positions || []).filter(x => SLOTS.includes(x)).map(x => [x, rankNum(p, x)])) }));
-      publish(a.act?.next || 'NONE', { ...(a.act || { type: 'NONE' }), club: cell.team?.abbr, era: cell.era, picked: SLOTS.filter(sl => picks[sl]).map(sl => ({ slot: sl, name: picks[sl].name })), offer });
+      // for the perfect-team hunt: each player's prime (if the game offers one) with its ranks, each pick's rank where
+      // he plays, the #1 stint at every position, and what boosters and coins you have
+      const bs = bestStints();
+      for (const o of offer) { const p = (cell.squad || []).find(x => x.name === o.name && !usedIds.has(String(x.player_id))); const pr = p && primeOf(p, bs);
+        if (pr) o.prime = { abbr: pr.team?.abbr || null, era: pr.era, value: +val(pr).toFixed(2),
+          ranks: Object.fromEntries(((pr.positions && pr.positions.length) ? pr.positions : p.positions || []).filter(x => SLOTS.includes(x)).map(x => [x, rankNum(pr, x)])) }; }
+      const targets = Object.fromEntries(SLOTS.map(sl => { let best = null;
+        for (const q of squads()) for (const x of q.squad) if ((x.positions || []).includes(sl) && (!best || val(x) > best.v)) best = { name: x.name, abbr: q.team?.abbr, team_id: String(q.team?.team_id), era: q.era, v: val(x) };
+        return [sl, best]; }));
+      publish(a.act?.next || 'NONE', { ...(a.act || { type: 'NONE' }), club: cell.team?.abbr, clubId: String(cell.team?.team_id), era: cell.era,
+        picked: SLOTS.filter(sl => picks[sl]).map(sl => ({ slot: sl, name: picks[sl].name, rank: rankNum(picks[sl], sl), positions: picks[sl].positions || [] })),
+        offer, targets, boosters: cell.boosters || {}, coins });
     } else publish('WAIT', { type: 'WAIT' });
     if (!result && !cell) body = 'Waiting for the next spin or pick. Run this before your first spin so it can follow the whole game.';
     return { banner, body, resultRows };
@@ -543,10 +554,11 @@
     const tone = st?.tone, bg = tone === 'gold' ? '#a16207' : tone === 'warn' ? '#9a3412' : tone ? '#991b1b' : 'rgba(255,255,255,.06)';
     const counts = st ? `${st.version || ''} &middot; games ${st.games}/${st.gamesEnd ?? ''} &middot; picks ${st.picks} &middot; restarts ${st.restarts}${st.errors ? ` &middot; <b>errors ${st.errors}</b>` : ''} &middot; ${st.coinsGained == null ? 'coins ?' : `+${st.coinsGained} coins`}` : driverLoading ? 'loading&hellip;' : 'off';
     const msg = st?.msg ? `<div style="margin-top:2px">${st.msg}</div>` : '';
-    return `<div style="margin:2px -3px 5px;padding:5px 7px;border-radius:6px;background:${bg};font-size:12px"><b>Auto</b> ${st ? (running ? (st.mode === 'wilt' ? '&middot; WILT HUNT' : '&middot; running') : st.foundWilt ? '&middot; Wilt found' : '&middot; paused') : ''} <small style="opacity:.8">${counts}</small>${msg}`
+    return `<div style="margin:2px -3px 5px;padding:5px 7px;border-radius:6px;background:${bg};font-size:12px"><b>Auto</b> ${st ? (running ? (st.mode === 'wilt' ? '&middot; WILT HUNT' : st.mode === 'perfect' ? '&middot; PERFECT HUNT' : '&middot; running') : st.foundWilt ? '&middot; Wilt found' : '&middot; paused') : ''} <small style="opacity:.8">${counts}</small>${msg}`
       + `<div style="margin-top:4px;display:flex;gap:2px;flex-wrap:wrap">`
       + b('drv-auto', '&#9654; Auto', running && st.mode === 'advice', 'Play drafts by the advice, stopping on the alerts in settings')
       + b('drv-wilt', '&#127919; Wilt', running && st.mode === 'wilt', 'Hunt for Wilt (#1 or #2 C)')
+      + b('drv-perfect', '&#127942; Perfect', running && st.mode === 'perfect', 'Hunt for the perfect team: the #1 player at every position')
       + (running ? b('drv-pause', '&#10074;&#10074; Pause', false, 'Pause') : st ? b('drv-resume', 'Resume', false, 'Carry on in the current mode') : '')
       + (st ? b('drv-cam', st.armed ? '&#128247; armed' : st.canCapture ? '&#128247; arm' : '&#128247; manual', st.armed, st.canCapture ? 'Screenshot an 82-0 result (asks to share this tab)' : 'This device can\'t capture: overlays hide on 82-0 for your own screenshot') : '')
       + `</div></div>`;

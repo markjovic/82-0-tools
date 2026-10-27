@@ -7,13 +7,14 @@
   window.r82drv = true;
 
   // ---------- settings ----------
-  const DRIVER_VERSION = 'd17';   // shown in the status box so you can tell which driver is loaded
+  const DRIVER_VERSION = 'd19';   // shown in the status box so you can tell which driver is loaded
   const MAX_GAMES  = 100;    // stop after this many finished games (one batch; Resume starts another)
   const MAX_RESTARTS = 400;  // Wilt hunt: stop after this many abandoned drafts
   // mode: 'advice' plays every draft by the overlay's advice; 'wilt' hunts for the #1 C (Wilt Chamberlain, PHI 1960s):
   // keeps C free, takes only S-grade (top 10) players elsewhere, abandons any draft with no S-grade player on offer,
   // and pauses for you the moment the #1 C appears.
-  let MODE = window.r82mode === 'wilt' ? 'wilt' : 'advice';
+  const MODES = ['advice', 'wilt', 'perfect'];
+  let MODE = MODES.includes(window.r82mode) ? window.r82mode : 'advice';
   // caps apply per batch: when one is reached the driver stops, and pressing Resume / Auto / Wilt starts a new batch
   // games per batch comes from the overlay's settings (default 100); between batches Auto pauses BATCH_REST_MS then carries on
   const batchSize = () => { const n = +(window.r82settings?.().batch); return n >= 1 ? Math.round(n) : MAX_GAMES; };
@@ -65,7 +66,7 @@
   window.r82runlog = () => runLog;
   window.r82stop = () => { stopped = true; say('paused by you'); };
   // controls used by the overlay's buttons
-  window.r82setMode = m => { MODE = m === 'wilt' ? 'wilt' : 'advice'; finishAfterGame = false; foundWilt = false; };
+  window.r82setMode = m => { MODE = MODES.includes(m) ? m : 'advice'; finishAfterGame = false; foundWilt = false; };
   window.r82state = () => ({ running: looping && !stopped, mode: MODE, foundWilt, games, gamesEnd, picks, restarts, errors, version: DRIVER_VERSION,
     coinsGained: coinStart == null ? null : coinLast - coinStart, msg: lastMsg, tone: lastTone, armed: !!shotStream, canCapture });
   window.r82cam = () => { if (shotStream) takeShot('test'); else armShots(); };
@@ -202,7 +203,7 @@
     // hard block: never press boosters, re-rolls, sharing, account or ad controls, whatever the logic above decided
     const label = ((el.getAttribute && el.getAttribute('aria-label')) || '') + ' ' + txt(el);
     // (the one exception: a deliberate free/owned re-roll on the final pick in Auto, which passes allowRespin)
-    const blocked = opts.allowCoins ? /double pick|\btrade\b|\bprime\b|booster|share results|sign out|watch|\bx2\b|rewarded|profile|settings|leaderboard|challenges|my stats|how to play|get the app|download|edit name|copy user id|socials|menu/i
+    const blocked = opts.allowBooster ? /share results|sign out|watch|\bx2\b|rewarded|profile|settings|leaderboard|menu/i : opts.allowCoins ? /double pick|\btrade\b|\bprime\b|booster|share results|sign out|watch|\bx2\b|rewarded|profile|settings|leaderboard|challenges|my stats|how to play|get the app|download|edit name|copy user id|socials|menu/i
                   : opts.allowRespin ? /double pick|\btrade\b|\bprime\b|booster|share results|sign out|watch|\bx2\b|rewarded|profile|settings|leaderboard|challenges|my stats|how to play|get the app|download|edit name|copy user id|socials|menu|coin balance/i
                                      : /double pick|\btrade\b|\bprime\b|respin|booster|share results|sign out|watch|\bx2\b|rewarded|coin balance|profile|settings|leaderboard|challenges|my stats|how to play|get the app|download|edit name|copy user id|socials|menu/i;
     if (blocked.test(label)) {
@@ -447,6 +448,13 @@
     if (kind === 'RESULT') {
       const key = parts.slice(1).join('|') + '|' + window.r820.seq;
       if (lastResultSeen !== key) { lastResultSeen = key; games++; sPicks = 0; say(`game ${games}: ${parts[1]} (score ${parts[2]}, model ${window.r820.state?.model})`);
+        if (expectPerfect) { expectPerfect = false; stopped = true;
+          const file = shotStream ? await takeShot('perfect') : null;
+          say(`PERFECT TEAM drafted: all five #1 players (${parts[1]}, score ${parts[2]}). ${file ? 'Screenshot saved: ' + file : 'Overlays hidden: take your screenshot, then tap anywhere.'}`, 'gold');
+          try { const ac = new AudioContext(), o = ac.createOscillator(); o.frequency.value = 988; o.connect(ac.destination); o.start(); o.stop(ac.currentTime + 1); } catch (e) {}
+          try { navigator.vibrate?.([300, 100, 300, 100, 300]); } catch (e) {}
+          if (!file) { await sleep(3500); hideForManualShot('perfect'); }
+          persist('perfect team', { result: parts[1], score: parts[2] }); break; }
         if (/^82-0$/.test(parts[1]) && (window.r82settings?.().stop82 ?? true)) {
           const file = shotStream ? await takeShot('82-0') : null;
           stopped = true;
@@ -480,6 +488,8 @@
       continue;
       }
     }
+    // ---- Perfect-team hunt: the #1 player at every position
+    if (MODE === 'perfect') { const r = await perfectRoll(seq); if (r === 'break') break; if (r === 'done') continue; }
     // ---- Auto alerts: stop (gold, beep) when one of these is on and true for this roll; once per roll
     if (MODE === 'advice') {
       const st = window.r820?.state || {}, f = st.flags || {}, set = window.r82settings?.() || {};
@@ -490,7 +500,7 @@
         : set.double && f.doubleS ? `two S-tier players on offer for a double pick: ${f.doubleS.a} and ${f.doubleS.b}${f.doubleS.p82 != null && f.base ? ` (82-0 chance ${Math.round(f.doubleS.p82 * 100)}%, ${f.doubleS.rec}, with it; ${Math.round(f.base.p82 * 100)}%, ${f.base.rec}, without)` : ''}` : null;
       if (hit && !alerted.has(seq)) { alerted.add(seq); alertStop(hit + (f.options?.length ? ` [options: ${f.options.join('; ')}]` : '')); break; }
     }
-    if (kind === 'RESTART' && MODE === 'advice' && !AUTO_QUITS) {
+    if (kind === 'RESTART' && MODE !== 'wilt' && !AUTO_QUITS) {   // Auto and the perfect hunt play weak drafts out
       const o = window.r820?.state?.otherwise;
       if (!o) { await fail('overlay advised a restart without a pick to fall back on (overlay v36+ needed)'); break; }
       say(`weak first spin: playing it out anyway, take ${o.name} → ${o.slot}`);
@@ -554,6 +564,146 @@
         say(`${f.startS.count} S-tier picks to start, but no re-roll or booster to use on this roll: carrying on`); } }
   }
   }
+  // ---------- perfect-team hunt ----------
+  // Rules: take any #1 on offer (at his #1 position, moving a non-#1 out of the way if he can play elsewhere).
+  // Prime an offered player into a #1, or trade a #1 in for a non-#1, only while the team has at most one non-#1
+  // player, and never on the fifth pick unless it completes the perfect team. With four #1s and one gap, re-roll
+  // (team or era, towards the missing #1's squad) while re-rolls or coins allow. Otherwise draft normally for coins.
+  let expectPerfect = false;
+  const boosterCost = b => b == null ? null : +(b.cost ?? b.price ?? b.coin_cost ?? b.coins ?? NaN);
+  const canUse = (key, coins) => { const b = window.r820?.state?.boosters?.[key];
+    if (!b || b.enabled === false) return null;
+    if ((+b.used_in_draft || 0) >= (+b.max_per_draft || Infinity)) return null;
+    if ((+b.owned_left || 0) > 0) return 'owned';
+    if ((+b.free_left || 0) > 0 || (+b.remaining || 0) > 0 && b.next_use === 'free') return 'free';
+    const fallback = { prime: 250 }[key] ?? null, c = Number.isFinite(boosterCost(b)) ? boosterCost(b) : fallback;
+    if (b.next_use === 'coins' && c != null && coins != null && coins >= c) return `buy (${c} coins)`;
+    if (b.next_use === 'coins' && c == null && coins != null && coins >= 500) return 'buy (price unknown)';
+    return null; };
+  // press a booster button, buying it first if the game asks, then wait for its selection screen
+  async function startBooster(label, how, screenRe) {
+    const btn = byText(new RegExp('^' + label + '$', 'i')).map(el => el.closest('button,[role=button]') || el)[0];
+    if (!btn) return fail(`${label} button not found`, true);
+    await click(btn, label, { allowBooster: true }); await sleep(800);
+    if (/^buy/.test(how)) {
+      const ok = await waitFor(() => { const d = [...document.querySelectorAll('[role=dialog],[aria-modal=true]')].filter(x => !ours(x) && visible(x));
+        const pool = (d.length ? d.flatMap(x => [...x.querySelectorAll('button,[role=button]')]) : []).filter(b => !ours(b) && visible(b));
+        return pool.find(b => /buy|confirm|yes|spend|purchase|unlock|\b\d{2,4}\b/i.test(txt(b)) && !/cancel|\bno\b|close|not now|watch|\bad\b|video/i.test(txt(b))) || null; }, `the "buy ${label}" confirmation`);
+      if (!ok) return fail(`pressed ${label} to buy it but found no confirm button`, true);
+      await click(ok, `buy ${label}: "${txt(ok).replace(/\s+/g, ' ').slice(0, 30)}"`, { allowBooster: true, allowCoins: true }); await sleep(900);
+    }
+    if (!(await waitFor(() => byText(screenRe)[0] || null, `the ${label} screen`))) return fail(`${label}: its selection screen didn't appear`, true);
+    return true; }
+  async function rerollNow(scope) {
+    const btn = byLabel(new RegExp('^respin ' + scope, 'i'));
+    if (!btn || /\(0 left\)/i.test(btn.getAttribute('aria-label') || '')) return false;
+    const st = window.r820?.state || {}, b = (st.boosters || {})['respin_' + scope] || {}, seq0 = window.r820?.seq;
+    await click(btn, `re-roll ${scope}`, { allowRespin: true });
+    if (b.next_use === 'coins') {
+      const confirmBtn = await waitFor(() => { const d = [...document.querySelectorAll('[role=dialog],[aria-modal=true]')].filter(x => !ours(x) && visible(x));
+        const pool = (d.length ? d.flatMap(x => [...x.querySelectorAll('button,[role=button]')]) : []).filter(x => !ours(x) && visible(x));
+        return pool.find(x => /confirm|yes|spend|\buse\b|re-?roll|respin|continue|\bok\b|\b100\b/i.test(txt(x) + ' ' + (x.getAttribute('aria-label') || '')) && !/cancel|\bno\b|close|not now|watch|\bad\b|video|free/i.test(txt(x))) || null; }, 'the "spend coins" confirmation');
+      if (!confirmBtn) return fail(`re-roll ${scope}: no "spend coins" confirm button`, true);
+      await click(confirmBtn, 'confirm coin re-roll', { allowRespin: true, allowCoins: true });
+    }
+    if (!(await waitSeq(seq0))) return fail(`the ${scope} re-roll did not register`);
+    return true; }
+  // where everyone would stand: assign slots so as many players as possible sit at their #1 position
+  async function perfectRoll(seq) {
+    const st = window.r820?.state || {}, kind = (window.r820?.next || '').split('|')[0];
+    if (!['TAKE', 'MOVE', 'REROLL_TEAM', 'REROLL_ERA', 'RESTART', 'NONE'].some(k => kind.startsWith(k)) && !kind.startsWith('BOOST')) return 'normal';
+    const picked = st.picked || [], open = st.open || [], offer = st.offer || [], coins = st.coins;
+    const ones = picked.filter(r => r.rank === 1), non1 = picked.filter(r => r.rank !== 1);
+    const last = picked.length === 4;
+    const say1 = m => say('perfect hunt: ' + m);
+    // a non-#1 sitting in a slot can step aside if he can play another open slot
+    const movable = slot => { const occ = picked.find(r => r.slot === slot); if (!occ) return null; if (occ.rank === 1) return false;
+      const to = (occ.positions || []).find(x => open.includes(x)); return to || false; };
+    const place = async (name, slot, tag) => {
+      const mv = movable(slot);
+      if (mv === false) return false;
+      if (mv) { const occ = picked.find(r => r.slot === slot); say1(`moving ${occ.name} ${slot} → ${mv} to make room`); if (!(await movePlayer(occ.name, mv))) return 'break'; }
+      if (last && ones.length === 4) expectPerfect = true;
+      say1(`${tag} ${name} → ${slot}`);
+      if (!(await pickPlayer(name, slot))) return 'break';
+      if (!last && !(await spin(false))) { await fail('placed the player but found no SPIN button'); return 'break'; }
+      if (!(await waitSeq(seq))) { await fail(`pick of ${name} → ${slot} did not register`); return 'break'; }
+      picks++; consecFails = 0; return 'done'; };
+    // With four players placed, three #1s and one non-#1, placing anyone ends the draft short of perfect. If a trade
+    // is available, hold the fifth pick: trade the non-#1 out when his #1 turns up, re-rolling to find him.
+    const tradeHow = canUse('trade', coins);
+    const holdForTrade = last && ones.length === 3 && non1.length === 1 && !!tradeHow;
+    // 1. a #1 on offer, at his #1 position (open, or held by a non-#1 who can move)
+    for (const o of offer) for (const [slot, rk] of Object.entries(o.ranks || {})) {
+      if (rk !== 1) continue;
+      if (last && ones.length !== 4 && holdForTrade) continue;   // placing him would end the draft at four #1s
+      if (open.includes(slot) || movable(slot)) { const r = await place(o.name, slot, '#1 found: taking'); if (r) return r; }
+    }
+    const fixable = non1.length <= 1;
+    // 2. prime an offered player into a #1
+    if (fixable) for (const o of offer) { if (!o.prime) continue;
+      for (const [slot, rk] of Object.entries(o.prime.ranks || {})) {
+        if (rk !== 1 || !(open.includes(slot) || movable(slot))) continue;
+        if (last && ones.length !== 4) continue;                       // pick 5: only if it completes the perfect team
+        if (non1.length === 1 && !last && !canUse('trade', coins)) continue;   // the remaining non-#1 could never be traded out
+        const how = canUse('prime', coins); if (!how) { say1(`prime would make ${o.name} the #1 ${slot}, but no prime is available (${coins ?? '?'} coins)`); continue; }
+        const mv = movable(slot);
+        if (mv) { const occ = picked.find(r => r.slot === slot); if (!(await movePlayer(occ.name, mv))) return 'break'; }
+        say1(`priming ${o.name} (${o.prime.abbr} ${o.prime.era}) into the #1 ${slot} [${how}]`, 'warn'); persist('booster', { kind: 'prime', player: o.name, slot, how });
+        if (!(await startBooster('PRIME', how, /choose a player to prime/i))) return 'break';
+        const row = byName(o.name)[0]; if (!row) { await fail(`prime: ${o.name} not found on the prime screen`, true); return 'break'; }
+        await click(row, `prime ${o.name}`, { allowBooster: true }); await sleep(COURT_MS);
+        if (last && ones.length === 4) expectPerfect = true;
+        const sEl = slotEl(slot); if (!sEl) { await fail(`prime: court position ${slot} not found`, true); return 'break'; }
+        await click(sEl, `${slot} for primed ${o.name}`);
+        if (!last && !(await spin(false))) { await fail('primed and placed, but found no SPIN button'); return 'break'; }
+        if (!(await waitSeq(seq))) { await fail(`primed pick of ${o.name} did not register`, true); return 'break'; }
+        picks++; consecFails = 0; return 'done'; } }
+    // 3. trade a #1 on offer in for the non-#1 holding his position. A trade doesn't place the fifth player, so with
+    //    four players it's allowed when it leaves four #1s AND a re-roll can then be afforded to look for the fifth.
+    const rerollAffordable = () => ['team', 'era'].some(sc => { const b = (st.boosters || {})['respin_' + sc] || {};
+      return (+b.free_left || 0) > 0 || (+b.owned_left || 0) > 0 || b.next_use === 'free' || b.next_use === 'owned' || (b.next_use === 'coins' && coins != null && coins >= 100); });
+    const tradeOK = fixable && non1.length === 1 && (!last || (ones.length === 3 && rerollAffordable()));
+    if (tradeOK) for (const o of offer) for (const [slot, rk] of Object.entries(o.ranks || {})) {
+      if (rk !== 1) continue; const occ = picked.find(r => r.slot === slot); if (!occ || occ.rank === 1) continue;
+      const how = canUse('trade', coins); if (!how) { say1(`a trade would bring in #1 ${o.name}, but no trade is available`); continue; }
+      say1(`trading ${occ.name} out for #1 ${o.name} at ${slot} [${how}]`, 'warn'); persist('booster', { kind: 'trade', in: o.name, out: occ.name, slot, how });
+      if (!(await startBooster('TRADE', how, /trade/i))) return 'break';
+      const row = byName(o.name)[0]; if (!row) { await fail(`trade: ${o.name} not found on the trade screen`, true); return 'break'; }
+      await click(row, `trade in ${o.name}`, { allowBooster: true }); await sleep(COURT_MS);
+      const sEl = slotEl(slot); if (!sEl) { await fail(`trade: court position ${slot} not found`, true); return 'break'; }
+      await click(sEl, `${occ.name} out at ${slot}`);
+      if (!(await waitSeq(seq))) { await fail(`trade of ${o.name} for ${occ.name} did not register`, true); return 'break'; }
+      // a trade makes the game re-spin this round (it shows the next club and era before spinning). The new roll is
+      // already known to the overlay; press SPIN if the game is waiting for it, then the next pass decides the pick.
+      persist('trade done', { next: window.r820?.state?.club + ' ' + window.r820?.state?.era });
+      await sleep(1200); const sp = button(/^spin$/i); if (sp) { await click(sp, 'SPIN (after the trade)'); await sleep(1500); }
+      return 'done';
+    }
+    // 3b. holding the fifth pick for a trade: re-roll towards the #1 who'd replace the non-#1
+    if (holdForTrade) {
+      const nslot = non1[0].slot, tgt = (st.targets || {})[nslot];
+      const scopes = tgt && st.era === tgt.era ? ['team', 'era'] : tgt && st.clubId === tgt.team_id ? ['era', 'team'] : ['team', 'era'];
+      for (const sc of scopes) { const b = (st.boosters || {})['respin_' + sc] || {};
+        const affordable = (+b.free_left || 0) > 0 || (+b.owned_left || 0) > 0 || b.next_use === 'free' || b.next_use === 'owned' || (b.next_use === 'coins' && coins != null && coins >= 100);
+        if (!affordable) continue;
+        say1(`three #1s + ${non1[0].name}: holding the last pick, re-rolling ${sc} for ${tgt ? tgt.name + ' (' + tgt.abbr + ' ' + tgt.era + ')' : 'the #1 ' + nslot} to trade in`, 'warn');
+        const r = await rerollNow(sc); if (r === true) return 'done'; if (r === false && stopped) return 'break'; }
+      say1(`three #1s + ${non1[0].name}, but no re-rolls or coins left: finishing the draft normally`);
+    }
+    // 4. four #1s and one gap: re-roll towards the missing #1's squad while re-rolls or coins allow
+    if (last && ones.length === 4) {
+      const gap = open[0], tgt = (st.targets || {})[gap];
+      const scopes = tgt && st.era === tgt.era ? ['team', 'era'] : tgt && st.clubId === tgt.team_id ? ['era', 'team'] : ['team', 'era'];
+      for (const sc of scopes) { const b = (st.boosters || {})['respin_' + sc] || {};
+        const affordable = (+b.free_left || 0) > 0 || (+b.owned_left || 0) > 0 || b.next_use === 'free' || b.next_use === 'owned' || (b.next_use === 'coins' && coins != null && coins >= 100);
+        if (!affordable) continue;
+        say1(`four #1s: re-rolling ${sc} to find ${tgt ? tgt.name + ' (' + tgt.abbr + ' ' + tgt.era + ')' : 'the #1 ' + gap}`, 'warn');
+        const r = await rerollNow(sc); if (r === true) return 'done'; if (r === false && stopped) return 'break'; }
+      say1(`four #1s but no re-rolls or coins left for the #1 ${gap}: finishing the draft normally`);
+    }
+    return 'normal';   // nothing for the hunt on this roll: draft normally (collects coins)
+  }
   // ---------- recovery: fall back to the highest-value player that fits; failing that, quit and start again ----------
   async function recover(why) {
     inRecovery = true; recoveries++;
@@ -579,7 +729,7 @@
     } finally { inRecovery = false; }
   }
   async function runLoop() {
-    looping = true; say(MODE === 'wilt' ? 'hunting for Wilt (#1 or #2 C)' : 'running');
+    looping = true; say(MODE === 'wilt' ? 'hunting for Wilt (#1 or #2 C)' : MODE === 'perfect' ? 'hunting for the perfect team (#1 at every position)' : 'running');
     while (true) {
       needRecover = null;
       await innerLoop();
