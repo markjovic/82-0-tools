@@ -7,7 +7,7 @@
   window.r82drv = true;
 
   // ---------- settings ----------
-  const DRIVER_VERSION = 'd21';   // shown in the status box so you can tell which driver is loaded
+  const DRIVER_VERSION = 'd22';   // shown in the status box so you can tell which driver is loaded
   const MAX_GAMES  = 100;    // stop after this many finished games (one batch; Resume starts another)
   const MAX_RESTARTS = 400;  // Wilt hunt: stop after this many abandoned drafts
   // mode: 'advice' plays every draft by the overlay's advice; 'wilt' hunts for the #1 C (Wilt Chamberlain, PHI 1960s):
@@ -571,40 +571,57 @@
   // (team or era, towards the missing #1's squad) while re-rolls or coins allow. Otherwise draft normally for coins.
   let expectPerfect = false;
   const boosterCost = b => b == null ? null : +(b.cost ?? b.price ?? b.coin_cost ?? b.coins ?? NaN);
+  // the purchase panel's button is just the price ("250" with a coin icon); find it inside a dialog if there is one,
+  // otherwise any visible button whose whole text is a number (never the coin counter)
+  const findBuyButton = () => {
+    const dlg = [...document.querySelectorAll('[role=dialog],[aria-modal=true]')].filter(x => !ours(x) && visible(x));
+    const pool = (dlg.length ? dlg.flatMap(x => [...x.querySelectorAll('button,[role=button]')]) : [...document.querySelectorAll('button,[role=button]')])
+      .filter(b => !ours(b) && visible(b) && !/coin balance/i.test(b.getAttribute('aria-label') || ''));
+    return pool.find(b => /^\d[\d,]*$/.test(txt(b).replace(/\s+/g, ''))) || pool.find(b => /\b(buy|confirm|purchase|spend)\b/i.test(txt(b)) && !/cancel|close|watch|\bad\b|video/i.test(txt(b))) || null; };
+  const PRICES = { prime: 250, respin_team: 100, respin_era: 100 };   // trade's price isn't known yet: read from the panel
   const canUse = (key, coins) => { const b = window.r820?.state?.boosters?.[key];
     if (!b || b.enabled === false) return null;
     if ((+b.used_in_draft || 0) >= (+b.max_per_draft || Infinity)) return null;
     if ((+b.owned_left || 0) > 0) return 'owned';
     if ((+b.free_left || 0) > 0 || (+b.remaining || 0) > 0 && b.next_use === 'free') return 'free';
-    const fallback = { prime: 250 }[key] ?? null, c = Number.isFinite(boosterCost(b)) ? boosterCost(b) : fallback;
-    if (b.next_use === 'coins' && c != null && coins != null && coins >= c) return `buy (${c} coins)`;
-    if (b.next_use === 'coins' && c == null && coins != null && coins >= 500) return 'buy (price unknown)';
+    // none held: the game offers to sell one when its button is pressed (it reports next_use "none" or "coins")
+    const c = Number.isFinite(boosterCost(b)) ? boosterCost(b) : PRICES[key] ?? null;
+    if (c != null && coins != null && coins >= c) return `buy (${c} coins)`;
+    if (c == null && coins != null && coins >= 1000) return 'buy (price shown by the game)';
     return null; };
   // press a booster button, buying it first if the game asks, then wait for its selection screen
   async function startBooster(label, how, screenRe) {
-    const btn = byText(new RegExp('^' + label + '$', 'i')).map(el => el.closest('button,[role=button]') || el)[0];
-    if (!btn) return fail(`${label} button not found`, true);
-    await click(btn, label, { allowBooster: true }); await sleep(800);
+    const findBtn = () => byText(new RegExp('^' + label + '$', 'i')).map(el => el.closest('button,[role=button]') || el)[0]
+      || [...document.querySelectorAll('button,[role=button]')].find(b => !ours(b) && visible(b) && new RegExp('\\b' + label + '\\b', 'i').test(b.getAttribute('aria-label') || '')) || null;
+    let btn = findBtn(); if (!btn) return fail(`${label} button not found`, true);
+    await click(btn, label, { allowBooster: true }); await sleep(900);
     if (/^buy/.test(how)) {
-      const ok = await waitFor(() => { const d = [...document.querySelectorAll('[role=dialog],[aria-modal=true]')].filter(x => !ours(x) && visible(x));
-        const pool = (d.length ? d.flatMap(x => [...x.querySelectorAll('button,[role=button]')]) : []).filter(b => !ours(b) && visible(b));
-        return pool.find(b => /buy|confirm|yes|spend|purchase|unlock|\b\d{2,4}\b/i.test(txt(b)) && !/cancel|\bno\b|close|not now|watch|\bad\b|video/i.test(txt(b))) || null; }, `the "buy ${label}" confirmation`);
-      if (!ok) return fail(`pressed ${label} to buy it but found no confirm button`, true);
-      await click(ok, `buy ${label}: "${txt(ok).replace(/\s+/g, ' ').slice(0, 30)}"`, { allowBooster: true, allowCoins: true }); await sleep(900);
+      const buy = await waitFor(findBuyButton, `the ${label} purchase panel`);
+      if (!buy) return fail(`pressed ${label} to buy one but found no price button`, true);
+      const price = +txt(buy).replace(/[^\d]/g, '') || null, coins = window.r820?.state?.coins;
+      if (price && coins != null && price > coins) return fail(`${label} costs ${price}, you have ${coins} coins`, true);
+      persist('purchase', { item: label, price });
+      await click(buy, `buy ${label} for ${price ?? '?'} coins`, { allowBooster: true, allowCoins: true }); await sleep(1200);
+      // if buying doesn't open the selection screen by itself, press the booster again (now that one is held)
+      if (!byText(screenRe)[0]) { const x = byLabel(/^close$/i); if (x && [...document.querySelectorAll('[role=dialog],[aria-modal=true]')].some(d => visible(d) && d.contains(x))) { await click(x, 'close purchase panel'); await sleep(500); }
+        btn = findBtn(); if (btn) { await click(btn, label + ' (after buying)', { allowBooster: true }); await sleep(900); } }
     }
     if (!(await waitFor(() => byText(screenRe)[0] || null, `the ${label} screen`))) return fail(`${label}: its selection screen didn't appear`, true);
     return true; }
   async function rerollNow(scope) {
     const btn = byLabel(new RegExp('^respin ' + scope, 'i'));
-    if (!btn || /\(0 left\)/i.test(btn.getAttribute('aria-label') || '')) return false;
-    const st = window.r820?.state || {}, b = (st.boosters || {})['respin_' + scope] || {}, seq0 = window.r820?.seq;
+    if (!btn) return false;
+    const st = window.r820?.state || {}, b = (st.boosters || {})['respin_' + scope] || {}, seq0 = window.r820?.seq, coins = st.coins;
+    if ((+b.used_in_draft || 0) >= (+b.max_per_draft || Infinity)) return false;
+    const held = (+b.free_left || 0) > 0 || (+b.owned_left || 0) > 0 || b.next_use === 'free' || b.next_use === 'owned';
+    if (!held && !(coins != null && coins >= PRICES['respin_' + scope])) return false;
     await click(btn, `re-roll ${scope}`, { allowRespin: true });
-    if (b.next_use === 'coins') {
-      const confirmBtn = await waitFor(() => { const d = [...document.querySelectorAll('[role=dialog],[aria-modal=true]')].filter(x => !ours(x) && visible(x));
-        const pool = (d.length ? d.flatMap(x => [...x.querySelectorAll('button,[role=button]')]) : []).filter(x => !ours(x) && visible(x));
-        return pool.find(x => /confirm|yes|spend|\buse\b|re-?roll|respin|continue|\bok\b|\b100\b/i.test(txt(x) + ' ' + (x.getAttribute('aria-label') || '')) && !/cancel|\bno\b|close|not now|watch|\bad\b|video|free/i.test(txt(x))) || null; }, 'the "spend coins" confirmation');
-      if (!confirmBtn) return fail(`re-roll ${scope}: no "spend coins" confirm button`, true);
-      await click(confirmBtn, 'confirm coin re-roll', { allowRespin: true, allowCoins: true });
+    if (!held) {   // buying one: press the price / confirm button the game shows
+      const buy = await waitFor(() => findBuyButton() || (() => { const d = [...document.querySelectorAll('[role=dialog],[aria-modal=true]')].filter(x => !ours(x) && visible(x));
+          return d.flatMap(x => [...x.querySelectorAll('button,[role=button]')]).find(x => /confirm|yes|spend|\buse\b|re-?roll|respin|continue|\bok\b/i.test(txt(x)) && !/cancel|\bno\b|close|not now|watch|\bad\b|video|free/i.test(txt(x))) || null; })(), `the ${scope} re-roll purchase`);
+      if (!buy) return fail(`re-roll ${scope}: no purchase / confirm button appeared`, true);
+      persist('purchase', { item: 're-roll ' + scope, button: txt(buy).slice(0, 20) });
+      await click(buy, `buy ${scope} re-roll: "${txt(buy).replace(/\s+/g, ' ').slice(0, 20)}"`, { allowRespin: true, allowCoins: true });
     }
     if (!(await waitSeq(seq0))) return fail(`the ${scope} re-roll did not register`);
     return true; }
@@ -621,7 +638,7 @@
     // re-rolls, and only if this club existed in the target era). Odds come from the overlay (huntOdds).
     const affordableRR = sc => { const b = (st.boosters || {})['respin_' + sc] || {};
       if ((+b.used_in_draft || 0) >= (+b.max_per_draft || Infinity)) return false;
-      return (+b.free_left || 0) > 0 || (+b.owned_left || 0) > 0 || b.next_use === 'free' || b.next_use === 'owned' || (b.next_use === 'coins' && coins != null && coins >= 100); };
+      return (+b.free_left || 0) > 0 || (+b.owned_left || 0) > 0 || b.next_use === 'free' || b.next_use === 'owned' || (coins != null && coins >= 100); };
     const chooseReroll = slots => { const od = st.huntOdds || {}, sum = k => slots.reduce((a, sl) => a + ((od[sl] || {})[k] || 0), 0);
       const opts = [['team', sum('team')], ['era', sum('era')]].filter(([sc, p]) => p > 0 && affordableRR(sc)).sort((a, b) => b[1] - a[1]);
       if (opts.length) return { scope: opts[0][0], p: opts[0][1] };
@@ -678,7 +695,7 @@
     // 3. trade a #1 on offer in for the non-#1 holding his position. A trade doesn't place the fifth player, so with
     //    four players it's allowed when it leaves four #1s AND a re-roll can then be afforded to look for the fifth.
     const rerollAffordable = () => ['team', 'era'].some(sc => { const b = (st.boosters || {})['respin_' + sc] || {};
-      return (+b.free_left || 0) > 0 || (+b.owned_left || 0) > 0 || b.next_use === 'free' || b.next_use === 'owned' || (b.next_use === 'coins' && coins != null && coins >= 100); });
+      return (+b.free_left || 0) > 0 || (+b.owned_left || 0) > 0 || b.next_use === 'free' || b.next_use === 'owned' || (coins != null && coins >= 100); });
     const tradeOK = fixable && non1.length === 1 && (!last || (ones.length === 3 && rerollAffordable()));
     if (tradeOK) for (const o of offer) for (const [slot, rk] of Object.entries(o.ranks || {})) {
       if (rk !== 1) continue; const occ = picked.find(r => r.slot === slot); if (!occ || occ.rank === 1) continue;
