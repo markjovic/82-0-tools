@@ -9,7 +9,7 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null };
-  const VERSION = 'v59';
+  const VERSION = 'v63';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -382,9 +382,35 @@
       oddsHtml = `<div style="background:${bg};border-radius:6px;padding:5px 9px;margin:0 -3px 6px;font:700 13px/1.3 system-ui,sans-serif">${label}</div>`;
     }
     // always on screen: the top 4 options. Behind (i): picks so far, re-roll lines, squad counts.
+    // Options: the best 4 picks on this roll, normal or primed, ranked by result. A player in the list who could be
+    // primed gets his prime result on his own line; a prime only makes its own "prime only" line if it ranks in the 4.
+    const bsP = bestStints(), primed = [];
+    for (const p of (cell.squad || []).filter(x => !used.has(String(x.player_id)))) {
+      const src = primeOf(p, bsP); if (!src) continue;
+      const pp = { ...src, player_id: p.player_id, name: p.name, positions: src.positions?.length ? src.positions : p.positions, primed: true };
+      if (val(pp) <= val(p) + 0.05 || !feasible([...team, pp])) continue;
+      primed.push({ p: pp, base: p, v: val(pp) }); }
+    const rank4 = scored.slice(0, 4).map(c => String(c.p.player_id));
+    const primeSims = primed.sort((a, b) => b.v - a.v).filter((c, i) => i < 4 || rank4.includes(String(c.base.player_id)))
+      .map(c => ({ ...c, ...simulate(team, { p: c.p }, 400) }));
+    const byResult = (a, b) => (b.p82 - a.p82) || (b.avg - a.avg);
+    // Always the top 3 normal picks, then the 4th, plus any "prime only" whose result beats that 4th pick, best first,
+    // up to 6 players in all. Primes of players already listed go on their own line.
+    const top3ids = scored.slice(0, 3).map(c => String(c.p.player_id)), fourth = scored[3];
+    const extras = [...(fourth ? [{ kind: 'pick', c: fourth, p82: fourth.p82, avg: fourth.avg }] : []),
+      ...primeSims.filter(c => !top3ids.includes(String(c.base.player_id)) && !(fourth && String(c.base.player_id) === String(fourth.p.player_id)))
+        .filter(c => !fourth || byResult({ p82: fourth.p82, avg: fourth.avg }, c) > 0)
+        .map(c => ({ kind: 'prime', c, p82: c.p82, avg: c.avg }))].sort(byResult);
+    const shown = [...scored.slice(0, 3).map(c => ({ kind: 'pick', c })), ...extras].slice(0, 6);
+    // the prime result sits on its own indented line under the player
+    const primeBit = c => { const pl = placement({ p: c.p }), rk = rankNum(c.p, pl.slot);
+      return `<div style="margin:0 0 2px 14px;font-size:12px;color:#fcd34d">&#128081; prime &rarr; <b style="color:${rk === 1 ? GOLD : '#fcd34d'}">#${rk} ${pl.slot}</b> &middot; ${c.v.toFixed(1)} &middot; ${rec(c.avg)}${c.p82 >= 0.01 ? ` &middot; 82-0 ${pct(c.p82)}` : ''}</div>`; };
     let opts = '';
-    for (const c of scored.slice(0, 4)) { const pl = placement(c);
-      opts += `<div style="margin:1px 0">${c === top ? '\u2605 ' : ''}<b>${esc(c.p.name)}</b> &rarr; ${posRank(c.p, pl.slot)} &middot; ${c.v.toFixed(1)} &middot; ${rec(c.avg)}${c.p82 >= 0.01 ? ` &middot; 82-0 ${pct(c.p82)}` : ''}</div>`; }
+    for (const e of shown) {
+      if (e.kind === 'pick') { const c = e.c, pl = placement(c), pr = primeSims.find(x => String(x.base.player_id) === String(c.p.player_id));
+        opts += `<div style="margin:1px 0">${c === top ? '\u2605 ' : ''}<b>${esc(c.p.name)}</b> &rarr; ${posRank(c.p, pl.slot)} &middot; ${c.v.toFixed(1)} &middot; ${rec(c.avg)}${c.p82 >= 0.01 ? ` &middot; 82-0 ${pct(c.p82)}` : ''}</div>${pr ? primeBit(pr) : ''}`; }
+      else opts += `<div style="margin:1px 0"><b>${esc(e.c.p.name)}</b> <span style="color:#fcd34d;font-size:11px">(prime only)</span></div>${primeBit(e.c)}`;
+    }
     let h = `Picked: ${team.length ? SLOTS.filter(sl => picks[sl]).map(sl => { const rk = rankNum(picks[sl], sl);
       return `${sl} ${esc(picks[sl].name)}${picks[sl].primed ? ' (primed)' : ''} <b style="color:${rk === 1 ? GOLD : rk <= 10 ? '#fde68a' : 'inherit'}">#${rk}</b> ${val(picks[sl]).toFixed(1)}`; }).join(', ') : 'none yet'}`;
     if (!rerollOK) h += `<br><small>Re-roll advice: ${team.length < 3 ? `only after 3 players are picked (${team.length} so far)` : '82-0 is no longer reachable with this team, so a re-roll would be wasted'}.</small>`;
