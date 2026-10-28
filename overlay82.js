@@ -9,14 +9,14 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null };
-  const VERSION = 'v58';
+  const VERSION = 'v59';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
-  // Refitted 21 Oct 2026 from all 208 logged games. Team blocks have a bend: below BPG_BEND team blocks, each block is worth
-  // BPG_EXTRA more (low-block teams are penalised harder). Leave-one-out error 0.38 (0.49 without the bend).: team score = sum of player values + BASE.
+  // Refitted 28 Oct 2026 from 1,499 logged games (the 138.4 outlier left out); 10-fold check error 0.35. Team blocks have a bend: below BPG_BEND team blocks, each block is worth
+  // BPG_EXTRA more (low-block teams are penalised harder). : team score = sum of player values + BASE.
   // A player with no steals/blocks on record (1960s, early 1970s) gets NO_DEF instead.
-  const MODEL = { ppg: 0.3395, rpg: 0.6158, apg: 0.6149, spg: 1.2753, bpg: 1.3963, NO_DEF: 3.3170, BASE: -3.6824, BPG_BEND: 2.10, BPG_EXTRA: 1.5471, GAMES: 208 };
+  const MODEL = { ppg: 0.3421, rpg: 0.6211, apg: 0.6152, spg: 1.2822, bpg: 1.3717, NO_DEF: 3.2871, BASE: -3.6827, BPG_BEND: 2.5, BPG_EXTRA: 1.1144, GAMES: 1499 };
   // Score to wins: a power curve that matches all 132 games exactly (a straight line missed the 102.7 game).
   // 82 wins needs a score between 119.27 and 119.36 (narrowed by the 112.0 game); the upper end is used.
   const winsFor = s => Math.max(0, Math.min(82, Math.round(82 * Math.pow(Math.max(0, s) / 120.02, 1.1495))));   // refitted on 310 games, 21 Oct
