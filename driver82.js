@@ -7,7 +7,7 @@
   window.r82drv = true;
 
   // ---------- settings ----------
-  const DRIVER_VERSION = 'd28';   // shown in the status box so you can tell which driver is loaded
+  const DRIVER_VERSION = 'd29';   // shown in the status box so you can tell which driver is loaded
   const MAX_GAMES  = 100;    // stop after this many finished games (one batch; Resume starts another)
   const MAX_RESTARTS = 400;  // Wilt hunt: stop after this many abandoned drafts
   // mode: 'advice' plays every draft by the overlay's advice; 'wilt' hunts for the #1 C (Wilt Chamberlain, PHI 1960s):
@@ -777,7 +777,9 @@
     if (blocker && !alerted.has('blocked|' + games)) { alerted.add('blocked|' + games); say1(`${blocker.name} is in the team as a non-#1 (${blocker.slot} #${blocker.rank}), so his #1 stint can never be added: no perfect team this draft`); }
     // While the hunt is still alive, don't spend a target player on a lesser stint: he could only ever be drafted
     // once, so taking him now (unprimed) would block his #1 for the rest of the draft. Take the best other player.
-    if (fixable && !blocker) {
+    // Only worth giving up value for when the hunt is as alive as the prime rule demands (no non-#1s yet, or at least
+    // two #1s with at most one non-#1); otherwise just take the best player, target or not.
+    if (fixable && !blocker && (non1.length === 0 || (ones.length >= 2 && non1.length <= 1))) {
       const adv = (kind === 'TAKE' ? { name: (window.r820.next || '').split('|')[1] } : st.otherwise) || {};
       if (adv.name && targetNames.includes(adv.name)) {
         const alt = offer.filter(o => !targetNames.includes(o.name))
