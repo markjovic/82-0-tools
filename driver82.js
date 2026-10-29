@@ -7,7 +7,7 @@
   window.r82drv = true;
 
   // ---------- settings ----------
-  const DRIVER_VERSION = 'd29';   // shown in the status box so you can tell which driver is loaded
+  const DRIVER_VERSION = 'd30';   // shown in the status box so you can tell which driver is loaded
   const MAX_GAMES  = 100;    // stop after this many finished games (one batch; Resume starts another)
   const MAX_RESTARTS = 400;  // Wilt hunt: stop after this many abandoned drafts
   // mode: 'advice' plays every draft by the overlay's advice; 'wilt' hunts for the #1 C (Wilt Chamberlain, PHI 1960s):
@@ -786,6 +786,17 @@
           .map(o => { const sl = Object.entries(o.ranks || {}).filter(([x]) => open.includes(x)).sort((a, b) => a[1] - b[1])[0]; return sl ? { name: o.name, slot: sl[0], v: o.value } : null; })
           .filter(Boolean).sort((a, b) => b.v - a.v)[0];
         if (alt) { const r = await place(alt.name, alt.slot, `keeping ${adv.name} free for his #1 stint: taking`); if (r) return r; }
+      }
+    }
+    // Never let a normal pick's "move first" shift a #1 out of his #1 position (that turned Jordan into "SF #2" and
+    // Pettit into "C #8"). If the advice moves a #1, take the best player who fits an open position as things stand.
+    if (fixable && kind === 'MOVE') {
+      const moves = (window.r820.next || '').split('|').filter(x => x.includes('>')).map(x => x.split('>')[0]);
+      const movesOne = picked.some(r => r.rank === 1 && moves.includes(r.name));
+      if (movesOne) {
+        const alt = offer.map(o => { const sl = Object.entries(o.ranks || {}).filter(([x]) => open.includes(x)).sort((a, b) => a[1] - b[1])[0]; return sl ? { name: o.name, slot: sl[0], v: o.value } : null; })
+          .filter(Boolean).filter(x => !(targetNames.includes(x.name) && !Object.values((offer.find(o => o.name === x.name) || {}).ranks || {}).includes(1))).sort((a, b) => b.v - a.v)[0];
+        if (alt) { const r = await place(alt.name, alt.slot, 'the advised move would shift a #1 out of position: taking'); if (r) return r; }
       }
     }
     return 'normal';   // nothing for the hunt on this roll: draft normally (collects coins)
