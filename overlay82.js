@@ -9,7 +9,7 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null };
-  const VERSION = 'v63';
+  const VERSION = 'v64';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -403,13 +403,17 @@
         .map(c => ({ kind: 'prime', c, p82: c.p82, avg: c.avg }))].sort(byResult);
     const shown = [...scored.slice(0, 3).map(c => ({ kind: 'pick', c })), ...extras].slice(0, 6);
     // the prime result sits on its own indented line under the player
+    // colour by what the prime makes him: #1 highlighted in gold, S-tier (2-10) yellow, anyone else a quieter
+    // version of the normal text so it doesn't draw the eye
+    const primeTone = rk => rk === 1 ? `color:#1a1a1a;background:${GOLD};padding:0 5px;border-radius:4px;font-weight:700`
+      : rk <= 10 ? 'color:#fcd34d' : 'opacity:.7';
     const primeBit = c => { const pl = placement({ p: c.p }), rk = rankNum(c.p, pl.slot);
-      return `<div style="margin:0 0 2px 14px;font-size:12px;color:#fcd34d">&#128081; prime &rarr; <b style="color:${rk === 1 ? GOLD : '#fcd34d'}">#${rk} ${pl.slot}</b> &middot; ${c.v.toFixed(1)} &middot; ${rec(c.avg)}${c.p82 >= 0.01 ? ` &middot; 82-0 ${pct(c.p82)}` : ''}</div>`; };
+      return `<div style="margin:0 0 2px 14px;font-size:12px"><span style="${primeTone(rk)}">&#128081; prime &rarr; #${rk} ${pl.slot} &middot; ${c.v.toFixed(1)} &middot; ${rec(c.avg)}${c.p82 >= 0.01 ? ` &middot; 82-0 ${pct(c.p82)}` : ''}</span></div>`; };
     let opts = '';
     for (const e of shown) {
       if (e.kind === 'pick') { const c = e.c, pl = placement(c), pr = primeSims.find(x => String(x.base.player_id) === String(c.p.player_id));
         opts += `<div style="margin:1px 0">${c === top ? '\u2605 ' : ''}<b>${esc(c.p.name)}</b> &rarr; ${posRank(c.p, pl.slot)} &middot; ${c.v.toFixed(1)} &middot; ${rec(c.avg)}${c.p82 >= 0.01 ? ` &middot; 82-0 ${pct(c.p82)}` : ''}</div>${pr ? primeBit(pr) : ''}`; }
-      else opts += `<div style="margin:1px 0"><b>${esc(e.c.p.name)}</b> <span style="color:#fcd34d;font-size:11px">(prime only)</span></div>${primeBit(e.c)}`;
+      else opts += `<div style="margin:1px 0"><b>${esc(e.c.p.name)}</b> <span style="font-size:11px;opacity:.7">(prime only)</span></div>${primeBit(e.c)}`;
     }
     let h = `Picked: ${team.length ? SLOTS.filter(sl => picks[sl]).map(sl => { const rk = rankNum(picks[sl], sl);
       return `${sl} ${esc(picks[sl].name)}${picks[sl].primed ? ' (primed)' : ''} <b style="color:${rk === 1 ? GOLD : rk <= 10 ? '#fde68a' : 'inherit'}">#${rk}</b> ${val(picks[sl]).toFixed(1)}`; }).join(', ') : 'none yet'}`;
