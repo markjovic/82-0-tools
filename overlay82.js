@@ -9,7 +9,7 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null };
-  const VERSION = 'v64';
+  const VERSION = 'v66';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -118,6 +118,10 @@
     const v = val(p), r = RANKS[sl].filter(x => x > v + 1e-9).length + 1;
     return `#${r} ${sl}`; };
   const rankNum = (p, sl) => { posRank(p, sl); const v = val(p); return RANKS[sl].filter(x => x > v + 1e-9).length + 1; };
+  // a rank as shown everywhere: #1 on a gold pill, S-tier (2-10) on a pale gold pill, others plain. Pills read on any
+  // background (the coloured top bars included).
+  const rankHtml = (p, sl, rk = rankNum(p, sl)) => rk === 1 ? `<span style="background:#f5c542;color:#1a1a1a;font-weight:700;padding:0 4px;border-radius:4px">#1 ${sl}</span>`
+    : rk <= 10 ? `<span style="background:#fde68a;color:#1a1a1a;font-weight:700;padding:0 4px;border-radius:4px">#${rk} ${sl}</span>` : `#${rk} ${sl}`;
   // The game's own grades, read off 123 logged results: D up to 49 wins, C 50-55, B 56-61, A 62-71, A+ 72 and up.
   const GRADES = [[72, 'A+', 'Historic', '#047857'], [62, 'A', 'Dynasty', '#16a34a'], [56, 'B', 'Contender', '#0e7490'], [50, 'C', 'Playoff', '#475569'], [0, 'D', 'Lottery', '#b91c1c']];
   const gradeOf = w => GRADES.find(g => w >= g[0]);
@@ -349,7 +353,7 @@
       return r <= 10 ? [GOLD, 'S'] : r <= 25 ? ['#047857', 'A+'] : r <= 50 ? ['#16a34a', 'A'] : r <= 100 ? ['#0e7490', 'B'] : r <= 200 ? ['#475569', 'C'] : ['#b91c1c', 'D']; };
     const pickBar = c => { const pl = placement(c), [bg, word] = tier(c);
       const head = `<div style="font:800 11px/1.2 system-ui,sans-serif;letter-spacing:.06em;opacity:.85">${pl.moves.length ? 'MOVE FIRST, THEN TAKE' : 'TAKE'}</div>${big(`${esc(c.p.name)} <span style="font-weight:700;opacity:.9">&rarr; ${pl.slot}</span>`)}`;
-      const sub = `${pl.moves.length ? `<b>First move ${pl.moves.join(', then ')}.</b><br>` : ''}${pl.keep.length ? `Needs ${pl.keep.join(', ')}.<br>` : ''}${c.v.toFixed(1)} &middot; ${posRank(c.p, pl.slot)}<span style="position:absolute;right:9px;bottom:6px;font:800 15px/1 system-ui,sans-serif" title="S top 10 ${pl.slot}, A+ top 25, A top 50, B top 100, C top 200, D beyond">(${word})</span>`;
+      const sub = `${pl.moves.length ? `<b>First move ${pl.moves.join(', then ')}.</b><br>` : ''}${pl.keep.length ? `Needs ${pl.keep.join(', ')}.<br>` : ''}${c.v.toFixed(1)} &middot; ${rankHtml(c.p, pl.slot)}<span style="position:absolute;right:9px;bottom:6px;font:800 15px/1 system-ui,sans-serif" title="S top 10 ${pl.slot}, A+ top 25, A top 50, B top 100, C top 200, D beyond">(${word})</span>`;
       return bar(bg, '#fff', head, sub); };
     let top_ = '';
     const restart = team.length === 0 && top && !['S', 'A+', 'A'].includes(tier(top)[1]);
@@ -407,16 +411,20 @@
     // version of the normal text so it doesn't draw the eye
     const primeTone = rk => rk === 1 ? `color:#1a1a1a;background:${GOLD};padding:0 5px;border-radius:4px;font-weight:700`
       : rk <= 10 ? 'color:#fcd34d' : 'opacity:.7';
+    // The position is where he'd play in THIS team (open positions, after any moves). If he ranks better somewhere
+    // the team can't use, that's shown in brackets, e.g. "#23 C (#5 SG)".
     const primeBit = c => { const pl = placement({ p: c.p }), rk = rankNum(c.p, pl.slot);
-      return `<div style="margin:0 0 2px 14px;font-size:12px"><span style="${primeTone(rk)}">&#128081; prime &rarr; #${rk} ${pl.slot} &middot; ${c.v.toFixed(1)} &middot; ${rec(c.avg)}${c.p82 >= 0.01 ? ` &middot; 82-0 ${pct(c.p82)}` : ''}</span></div>`; };
+      const best = (c.p.positions || []).filter(x => SLOTS.includes(x)).map(x => [x, rankNum(c.p, x)]).sort((a, b) => a[1] - b[1])[0];
+      const elsewhere = best && best[0] !== pl.slot && best[1] < rk ? ` <span style="opacity:.75">(#${best[1]} ${best[0]})</span>` : '';
+      return `<div style="margin:0 0 2px 14px;font-size:12px"><span style="${rk <= 10 ? '' : primeTone(rk)}">&#128081; prime &rarr; ${rankHtml(c.p, pl.slot, rk)} &middot; ${c.v.toFixed(1)} &middot; ${rec(c.avg)}${c.p82 >= 0.01 ? ` &middot; 82-0 ${pct(c.p82)}` : ''}</span>${elsewhere}</div>`; };
     let opts = '';
     for (const e of shown) {
       if (e.kind === 'pick') { const c = e.c, pl = placement(c), pr = primeSims.find(x => String(x.base.player_id) === String(c.p.player_id));
-        opts += `<div style="margin:1px 0">${c === top ? '\u2605 ' : ''}<b>${esc(c.p.name)}</b> &rarr; ${posRank(c.p, pl.slot)} &middot; ${c.v.toFixed(1)} &middot; ${rec(c.avg)}${c.p82 >= 0.01 ? ` &middot; 82-0 ${pct(c.p82)}` : ''}</div>${pr ? primeBit(pr) : ''}`; }
+        opts += `<div style="margin:1px 0">${c === top ? '\u2605 ' : ''}<b>${esc(c.p.name)}</b> &rarr; ${rankHtml(c.p, pl.slot)} &middot; ${c.v.toFixed(1)} &middot; ${rec(c.avg)}${c.p82 >= 0.01 ? ` &middot; 82-0 ${pct(c.p82)}` : ''}</div>${pr ? primeBit(pr) : ''}`; }
       else opts += `<div style="margin:1px 0"><b>${esc(e.c.p.name)}</b> <span style="font-size:11px;opacity:.7">(prime only)</span></div>${primeBit(e.c)}`;
     }
     let h = `Picked: ${team.length ? SLOTS.filter(sl => picks[sl]).map(sl => { const rk = rankNum(picks[sl], sl);
-      return `${sl} ${esc(picks[sl].name)}${picks[sl].primed ? ' (primed)' : ''} <b style="color:${rk === 1 ? GOLD : rk <= 10 ? '#fde68a' : 'inherit'}">#${rk}</b> ${val(picks[sl]).toFixed(1)}`; }).join(', ') : 'none yet'}`;
+      return `${sl} ${esc(picks[sl].name)}${picks[sl].primed ? ' (primed)' : ''} ${rankHtml(picks[sl], sl, rk).replace(' ' + sl + '<', '<').replace(new RegExp(' ' + sl + '$'), '')} ${val(picks[sl]).toFixed(1)}`; }).join(', ') : 'none yet'}`;
     if (!rerollOK) h += `<br><small>Re-roll advice: ${team.length < 3 ? `only after 3 players are picked (${team.length} so far)` : '82-0 is no longer reachable with this team, so a re-roll would be wasted'}.</small>`;
     for (const r of rr) h += `<br>&nbsp; <span style="color:${r.name === 'Era' ? '#c4b5fd' : '#fcd34d'}">${r.name} re-roll</span>: <b>${pct(r.p82)}</b>, ${rec(r.avg)} <small>(${r.n} squads seen)</small>`;
     if (boosts.length) { const bb = boosts.slice(0, 3).map(b => `${b.kind === 'DOUBLE' ? 'double pick ' + b.pair.map(q => esc(q.name)).join(' + ') : b.kind === 'TRADE' ? 'trade ' + esc(b.out.name) + ' for ' + esc(b.in.name) : 'prime ' + esc(b.p.name)}: ${pct(b.p82)}`).join('; ');
@@ -522,7 +530,7 @@
       const pred = teamScore(roster.map(r => ({ ...r.player, primed: (result.primedList || []).includes(String(r.player?.player_id)) })));
       resultRows = true;
       banner = BAN('#0b3d6b', '#fff', `RESULT ${esc(result.score_display?.name ?? '')}`, `Game score ${esc(result.score)} (model said ${pred.toFixed(1)}). ${esc(d.grade ?? '')} ${esc(d.grade_label ?? '')}`);
-      body = roster.map(r => `${esc(r.slot)} <b>${esc(r.player?.name)}</b> &middot; ${posRank(r.player, r.slot)} &middot; ${val(r.player).toFixed(1)}`).join('<br>');
+      body = roster.map(r => `${esc(r.slot)} <b>${esc(r.player?.name)}</b> &middot; ${rankHtml(r.player, r.slot)} &middot; ${val(r.player).toFixed(1)}`).join('<br>');
       body = `<div style="margin:2px 0 4px">${body}</div>`;
       publish(`RESULT|${d.wins ?? ''}-${d.losses ?? ''}|${result.score}`, { type: 'RESULT', wins: d.wins, losses: d.losses, score: result.score, model: +pred.toFixed(1), roster: roster.map(r => ({ slot: r.slot, name: r.player?.name })) });
     } else if (cell) { const a = advise(); banner = a.banner + (a.opts || ''); body = a.h;
