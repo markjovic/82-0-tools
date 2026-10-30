@@ -8,8 +8,8 @@
   //   r820.next  e.g. "TAKE|Magic Johnson|PF", "MOVE|Paul Pierce>SG|TAKE|Cliff Hagan|SF", "REROLL_TEAM|Walt Bellamy|C"
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
-  window.r820 = { version: null, next: 'WAIT', seq: 0, state: null };
-  const VERSION = 'v68';
+  window.r820 = { version: null, next: 'WAIT', seq: 0, state: null, league: 'nba' };
+  const VERSION = 'v69';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -659,6 +659,7 @@
   function hideFor(ms) { P.style.visibility = 'hidden'; clearTimeout(hideTimer); hideTimer = setTimeout(() => { P.style.visibility = ''; render(); }, ms); }
 
   function render() {
+    if (ignoredLeague) { P.style.cssText = CSS_() + ';background:#8b0000'; P.innerHTML = '<b>' + esc(ignoredLeague) + '</b>'; return; }
     // hidden: a small round button where the panel was, visible on 82-0's dark page; tap it to bring the panel back
     if (mode === 'off') { compute(); P.style.cssText = `position:fixed;z-index:99999;${where()};width:30px;height:30px;border-radius:50%;background:#f59e0b;border:2px solid #fff;opacity:.75;cursor:pointer;touch-action:none;box-shadow:0 2px 8px rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;font:800 11px/1 system-ui,sans-serif;color:#1a1a1a`; P.innerHTML = '82'; return; }
     P.style.cssText = CSS_() + ';cursor:pointer';
@@ -671,6 +672,7 @@
     else P.innerHTML = ctl + banner + (showSettings ? settingsHtml() : '') + driverBar() + (how ? `<div style="font-size:12px;line-height:1.45">${explain()}</div>` : info ? body + foot : (warn || (resultRows ? body : cell || result ? '' : body))) + (`<div style="font-size:10px;opacity:.55;margin-top:2px">tap to minimise &middot; drag to move &middot; &times; hides for 10s &middot; ${VERSION}</div>`);
   }
 
+  let sessLeague = null, ignoredLeague = '';   // league from the session/start request (else ?league= in the address)
   const _fetch = window.fetch;
   window.fetch = async (...args) => {
     const url = String(args[0]?.url || args[0] || '');
@@ -679,6 +681,10 @@
       let body = null; try { body = typeof args[1]?.body === 'string' ? JSON.parse(args[1].body) : null; } catch (e) {}
       res.clone().json().then(j => {
         try {
+          // College games are never logged or advised here (their scoring differs): use the College overlay for them
+          if (/session\/start/.test(url) && body && body.league) sessLeague = String(body.league);
+          { const lg = sessLeague || new URLSearchParams(location.search).get('league');
+            if (lg && /^ncaa/i.test(lg)) { ignoredLeague = `IGNORING ${lg} games: this is the NBA overlay. Nothing is logged or advised. Reload the tab and use the College overlay.`; render(); return; } ignoredLeague = ''; }
           if (/session\/start/.test(url)) { picks = {}; cell = null; result = null; rerolls = { team: false, era: false }; seenStart = false; }
           const act = body?.action;
           if (act?.type) LOG.actions[act.type] = (LOG.actions[act.type] || 0) + 1;
