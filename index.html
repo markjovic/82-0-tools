@@ -22,6 +22,8 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
 <button class="btn" id="copy" type="button">Copy bookmarklet</button> <a class="btn ghost" id="drag" href="javascript:(()=&gt;{if(window.r820)return;const s=document.createElement(&#x27;script&#x27;);s.src=&#x27;https://markjovic.github.io/82-0-tools/overlay82.js?v=&#x27;+Date.now();s.onerror=()=&gt;alert(&#x27;82-0 overlay could not be loaded from markjovic.github.io (blocked or missing).&#x27;);document.head.append(s)})()">Drag to bookmarks bar</a><span id="msg" aria-live="polite"></span></div>
 <div class="card"><p><strong>Auto-driver bookmarklet.</strong> Plays Classic drafts by itself, following the overlay (desktop, its own tab; stops after 30 games or on anything unexpected; never re-rolls, uses boosters, spends coins or watches ads). Stop it with <code>r82stop()</code> in the console, or reload the tab.</p>
 <button class="btn" id="copyauto" type="button">Copy auto bookmarklet</button> <button class="btn ghost" id="copywilt" type="button">Copy Wilt-hunt bookmarklet</button><span id="msgauto" aria-live="polite"></span><p><small>Wilt hunt: keeps C free, takes only S-grade (top 10) players elsewhere, starts a new draft whenever none is on offer, and pauses with a beep when the #1 C appears. Press Resume to have it finish that draft on the overlay&rsquo;s advice.</small></p></div>
+<div class="card"><p><strong>College recon logger.</strong> For 82-0 College only, while its scoring is worked out. Records the game&rsquo;s own replies in this browser (separate from the NBA log) and exports them. No advice yet. Use it in a tab where the NBA overlay and auto bookmarklets have <em>not</em> been run.</p>
+<button class="btn" id="copycol" type="button">Copy College logger bookmarklet</button><span id="msgcol" aria-live="polite"></span></div>
 <div class="card"><p><strong>Where it&rsquo;s up to.</strong> 82-0 works out your record on its own server, so the formula isn&rsquo;t visible. The overlay logs every finished game in your browser; after about 30 games, export the log and the scoring can be fitted from it.</p></div>
 </main>
 <script>
@@ -41,6 +43,12 @@ document.getElementById('copyauto').addEventListener('click', async () => {
 document.getElementById('copywilt').addEventListener('click', async () => {
   const m = document.getElementById('msgauto');
   try { await navigator.clipboard.writeText(WILT); m.textContent = ' Copied ' + WILT.length + ' characters (Wilt hunt).'; }
+  catch (e) { m.textContent = ' Copy failed (' + e.message + ').'; }
+});
+const COLLEGE = "javascript:(()=>{if(window.r82clog)return;const s=document.createElement('script');s.src='https://markjovic.github.io/82-0-tools/loggerCollege.js?v='+Date.now();s.onerror=()=>alert('82-0 College logger could not be loaded from markjovic.github.io (blocked or missing).');document.head.append(s)})()";
+document.getElementById('copycol').addEventListener('click', async () => {
+  const m = document.getElementById('msgcol');
+  try { await navigator.clipboard.writeText(COLLEGE); m.textContent = ' Copied ' + COLLEGE.length + ' characters.'; }
   catch (e) { m.textContent = ' Copy failed (' + e.message + ').'; }
 });
 document.getElementById('drag').addEventListener('click', e => { e.preventDefault(); document.getElementById('msg').textContent = 'Drag this button to your bookmarks bar, or use Copy.'; });
