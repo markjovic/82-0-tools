@@ -11,7 +11,7 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null, league: 'ncaab' };
-  const VERSION = 'cv9';
+  const VERSION = 'cv10';
   const LOG_KEY = 'r82c-log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -34,9 +34,9 @@
   // ---------- log ----------
   // The browser allows about 5 MB per site. Squads are the bulk, so they're stored in the same compact table form as
   // squads.json (about a third of the size) and expanded on load; the log in memory and the export are unchanged.
-  const load = () => { try { const o = JSON.parse(localStorage.getItem(LOG_KEY)) || { games: [], squads: {}, actions: {} };
-      if (o.squadsC) { o.squads = expandSquads(o.squadsC); delete o.squadsC; } o.squads ||= {}; return o; }
-    catch (e) { return { games: [], squads: {}, actions: {} }; } };
+  const parseLog = text => { const o = JSON.parse(text) || { games: [], squads: {}, actions: {} };
+    if (o.squadsC) { o.squads = expandSquads(o.squadsC); delete o.squadsC; } o.squads ||= {}; o.games ||= []; return o; };
+  const load = () => { try { return parseLog(localStorage.getItem(LOG_KEY)); } catch (e) { return { games: [], squads: {}, actions: {} }; } };
   function compactSquads(sq) {
     const teams = {}, out = {}, st = s => [s?.ppg ?? null, s?.rpg ?? null, s?.apg ?? null, s?.spg ?? null, s?.bpg ?? null];
     const team = (t, era) => { if (t) teams[t.team_id + '|' + era] = [t.abbr, t.name, t.primary_color ?? null, t.secondary_color ?? null]; };
@@ -56,16 +56,52 @@
   const storageReport = () => { const mb = n => (n / 1e6).toFixed(2) + ' MB'; let nba = 0, col = 0, other = 0;
     try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i), n = k.length + (localStorage.getItem(k) || '').length;
       if (/^r82c-/.test(k)) col += n; else if (/^r82/.test(k)) nba += n; else other += n; } } catch (e) { return 'storage could not be read: ' + e.message; }
-    return `Storage on 82-0.com: NBA overlay ${mb(nba)}, College ${mb(col)}, the game itself ${mb(other)} (browsers allow about 5 MB in total). Shared squads: ${siteNote ? esc(siteNote) : Object.keys(SITE).length + ' loaded'}.`; };
+    return `Storage on 82-0.com: NBA overlay ${mb(nba)}, College ${mb(col)}, the game itself ${mb(other)} (browsers allow about 5 MB in total). Shared squads: ${siteNote ? esc(siteNote) : Object.keys(SITE).length + ' loaded'}. College log kept in ${IDB.err ? 'localStorage (IndexedDB unavailable: ' + esc(IDB.err) + ')' : 'IndexedDB'}.`; };
+  // The log is kept in IndexedDB, which has its own allowance (hundreds of MB) instead of the ~5 MB of localStorage that
+  // every script on 82-0.com shares; on the tablet that shared space was already full before College saved a byte.
+  // A log left in localStorage by cv1-cv9 is read once, merged in, and removed after the first successful save.
+  // If IndexedDB can't be used, it falls back to localStorage and says so.
   let LOG = load();
   let note = '';
-  const save = () => {
-    const body = () => JSON.stringify({ ...LOG, squads: undefined, squadsC: compactSquads(pruned(LOG.squads)) });
-    try { localStorage.setItem(LOG_KEY, body()); if (/^LOG NOT SAVED/.test(note)) note = ''; if (window.r820) window.r820.logError = ''; }
+  const IDB = { db: null, ready: false, err: null };
+  const idbDo = (mode, fn) => new Promise((ok, bad) => { const t = IDB.db.transaction('kv', mode), req = fn(t.objectStore('kv'));
+    t.oncomplete = () => ok(req.result); t.onerror = () => bad(t.error || new Error('IndexedDB write failed')); t.onabort = () => bad(t.error || new Error('IndexedDB write aborted')); });
+  const body = () => JSON.stringify({ ...LOG, squads: undefined, squadsC: compactSquads(pruned(LOG.squads)) });
+  const saved = () => { if (/^LOG NOT SAVED/.test(note)) note = ''; if (window.r820) window.r820.logError = ''; };
+  const notSaved = (where, e) => { note = `LOG NOT SAVED (${where}): export the log now so nothing is lost. ` + ((e && e.message) || e); if (window.r820) window.r820.logError = (e && e.message) || String(e); };
+  const saveLocal = () => {   // fallback only when IndexedDB is unavailable
+    try { localStorage.setItem(LOG_KEY, body()); saved(); }
     catch (e) {
-      // still too big: drop the small diagnostic lists (they're only samples), keep games and squads
       LOG.recentActions = (LOG.recentActions || []).slice(-10); LOG.boosterSamples = (LOG.boosterSamples || []).slice(-5); LOG.cellSamples = (LOG.cellSamples || []).slice(-5);
-      try { localStorage.setItem(LOG_KEY, body()); note = ''; } catch (e2) { note = 'LOG NOT SAVED (storage full): export the log now so nothing is lost. ' + e2.message; if (window.r820) window.r820.logError = e2.message || 'storage full'; } } };
+      try { localStorage.setItem(LOG_KEY, body()); saved(); } catch (e2) { notSaved('IndexedDB unavailable, and localStorage is full', e2); } } };
+  let saving = false, again = false;
+  const save = () => {
+    if (IDB.err) return saveLocal();
+    if (!IDB.ready || saving) { again = true; return; }   // saved once the stored log has been read and merged
+    saving = true; let text;
+    try { text = body(); } catch (e) { saving = false; notSaved('could not build the log', e); return; }
+    idbDo('readwrite', st => st.put(text, 'log'))
+      .then(() => { saved(); try { if (localStorage.getItem(LOG_KEY) !== null) localStorage.removeItem(LOG_KEY); } catch (e) {} })
+      .catch(e => { notSaved('IndexedDB', e); try { render(); } catch (e2) {} })
+      .finally(() => { saving = false; if (again) { again = false; save(); } }); };
+  const mergeIn = o => {   // combine the IndexedDB log (o) with anything already in LOG (an old localStorage copy, or games since load)
+    const seen = new Set(o.games.map(g => g.game_id || g.at));
+    for (const g of LOG.games || []) if (!seen.has(g.game_id || g.at)) o.games.push(g);
+    o.games.sort((x, y) => String(x.at).localeCompare(String(y.at)));
+    for (const [k, q] of Object.entries(LOG.squads || {})) o.squads[k] = mergeSquad(o.squads[k], q);
+    for (const [k, v] of Object.entries(LOG)) if (!(k in o)) o[k] = v;
+    return o; };
+  const idbFail = m => { IDB.err = m; save(); try { render(); } catch (e) {} };
+  try {
+    const r = indexedDB.open('r82c-store', 1);
+    r.onupgradeneeded = () => { if (!r.result.objectStoreNames.contains('kv')) r.result.createObjectStore('kv'); };
+    r.onblocked = () => idbFail('blocked by another 82-0 tab');
+    r.onerror = () => idbFail((r.error && r.error.message) || 'did not open');
+    r.onsuccess = () => { IDB.db = r.result;
+      idbDo('readonly', st => st.get('log'))
+        .then(text => { if (text) LOG = mergeIn(parseLog(text)); IDB.ready = true; save(); try { render(); } catch (e) {} })
+        .catch(e => idbFail(e.message)); };
+  } catch (e) { IDB.err = e.message; }
 
   // ---------- model ----------
   const val = p => { const s = p?.stats || {}; return STATS.reduce((a, k) => a + MODEL[k] * (+s[k] || 0), 0) + (s.spg == null || s.bpg == null ? MODEL.NO_DEF : 0); };
