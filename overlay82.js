@@ -9,7 +9,7 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null };
-  const VERSION = 'v66';
+  const VERSION = 'v67';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -485,6 +485,10 @@
     // re-roll line, always visible: both options, the better one highlighted
     const rrLine = rr.length ? `<div style="margin:0 0 5px;font-size:12px">Re-roll: ${rr.map(r => `<span style="padding:1px 6px;border-radius:4px;${r === preferredRR ? `background:${r.name === 'Era' ? '#7c3aed' : '#f59e0b'};color:${r.name === 'Era' ? '#fff' : '#1a1a1a'};font-weight:700` : 'opacity:.75'}">${r.name} ${pct(r.p82)} &middot; ${rec(r.avg)}</span>`).join(' ')}</div>` : '';
     cache = { sig, banner: top_ + oddsHtml + rrLine, opts: restart ? '' : opts, h, rec: top, act };
+    // keep what was shown for the last 40 rolls (plain text), so a roll that flashes past in Auto can be checked later
+    { const plain = x => String(x).replace(/<br>|<\/div>/g, ' | ').replace(/<[^>]+>/g, ' ').replace(/&rarr;/g, '->').replace(/&middot;/g, '·').replace(/&#128081;/g, 'PRIME').replace(/&[a-z#0-9]+;/g, '').replace(/\s+/g, ' ').trim();
+      LOG.shown = [...(LOG.shown || []).slice(-39), { at: new Date().toISOString(), roll: `${cell.team?.abbr} ${cell.era}`, seq: cell.seq,
+        team: SLOTS.filter(sl => picks[sl]).map(sl => sl + ' ' + picks[sl].name).join(', '), advice: plain(top_).slice(0, 300), options: plain(opts).slice(0, 900) }]; }
     return cache;
   }
 
