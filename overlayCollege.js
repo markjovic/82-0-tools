@@ -11,7 +11,7 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null, league: 'ncaab' };
-  const VERSION = 'cv4';
+  const VERSION = 'cv7';
   const LOG_KEY = 'r82c-log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -56,11 +56,11 @@
   let note = '';
   const save = () => {
     const body = () => JSON.stringify({ ...LOG, squads: undefined, squadsC: compactSquads(pruned(LOG.squads)) });
-    try { localStorage.setItem(LOG_KEY, body()); if (/^LOG NOT SAVED/.test(note)) note = ''; }
+    try { localStorage.setItem(LOG_KEY, body()); if (/^LOG NOT SAVED/.test(note)) note = ''; if (window.r820) window.r820.logError = ''; }
     catch (e) {
       // still too big: drop the small diagnostic lists (they're only samples), keep games and squads
       LOG.recentActions = (LOG.recentActions || []).slice(-10); LOG.boosterSamples = (LOG.boosterSamples || []).slice(-5); LOG.cellSamples = (LOG.cellSamples || []).slice(-5);
-      try { localStorage.setItem(LOG_KEY, body()); note = ''; } catch (e2) { note = 'LOG NOT SAVED (storage full): export the log now so nothing is lost. ' + e2.message; } } };
+      try { localStorage.setItem(LOG_KEY, body()); note = ''; } catch (e2) { note = 'LOG NOT SAVED (storage full): export the log now so nothing is lost. ' + e2.message; if (window.r820) window.r820.logError = e2.message || 'storage full'; } } };
 
   // ---------- model ----------
   const val = p => { const s = p?.stats || {}; return STATS.reduce((a, k) => a + MODEL[k] * (+s[k] || 0), 0) + (s.spg == null || s.bpg == null ? MODEL.NO_DEF : 0); };
@@ -128,6 +128,25 @@
     const v = val(p), r = RANKS[sl].filter(x => x > v + 1e-9).length + 1;
     return `#${r} ${sl}`; };
   const rankNum = (p, sl) => { posRank(p, sl); const v = val(p); return RANKS[sl].filter(x => x > v + 1e-9).length + 1; };
+  // College positions mostly come in pairs (SG/PG, SF/PF), so the #1 PG and #1 SG are the same player and "#1 at every
+  // position" can never happen. The perfect team here is the best five distinct players the game can give you, and the
+  // hunts treat each of them as #1 at any position he fills in some arrangement of that five. Shown ranks stay true ranks.
+  let PERF = null, perfN = null;
+  const stintKey = p => `${p.player_id}|${p.team_id ?? p.team?.team_id}|${p.era}`;
+  const perfect = () => { if (PERF && perfN === sqSig) return PERF; perfN = sqSig;
+    const all = squads().flatMap(q => q.squad.map(x => ({ ...x, team_id: x.team_id ?? q.team?.team_id, era: x.era ?? q.era, abbr: q.team?.abbr })));
+    const top = Object.fromEntries(SLOTS.map(sl => [sl, [...new Map(all.filter(x => fits(x, sl)).map(x => [stintKey(x), x])).values()].sort((a, b) => val(b) - val(a)).slice(0, 8)]));
+    let best = null; const ids = new Set(), pick = [];
+    const rec = (i, sum) => { if (i === SLOTS.length) { if (!best || sum > best.sum) best = { sum, pick: [...pick] }; return; }
+      for (const x of top[SLOTS[i]]) { const id = String(x.player_id); if (ids.has(id)) continue; ids.add(id); pick.push(x); rec(i + 1, sum + val(x)); pick.pop(); ids.delete(id); } };
+    rec(0, 0);
+    const lineup = best ? best.pick : [], pairs = new Set();
+    const arr = (i, left, cur) => { if (i === SLOTS.length) { cur.forEach((x, j) => pairs.add(stintKey(x) + '>' + SLOTS[j])); return; }
+      left.forEach((x, k) => { if (fits(x, SLOTS[i])) arr(i + 1, left.filter((_, m) => m !== k), [...cur, x]); }); };
+    arr(0, lineup, []);
+    PERF = { lineup: Object.fromEntries(SLOTS.map((sl, j) => [sl, lineup[j] || null])), pairs, score: best ? best.sum + MODEL.BASE : null };
+    return PERF; };
+  const huntRank = (p, sl) => { if (perfect().pairs.has(stintKey(p) + '>' + sl)) return 1; const r = rankNum(p, sl); return r === 1 ? 2 : r; };
   // a rank as shown everywhere: #1 is a solid, glowing gold pill with a star; S-tier (2-10) is a gold outline;
   // everything else is plain text.
   const rankHtml = (p, sl, rk = rankNum(p, sl)) => rk === 1
@@ -566,22 +585,21 @@
     } else if (cell) { const a = advise(); banner = a.banner + (a.opts || ''); body = a.h;
       const usedIds = new Set(SLOTS.filter(sl => picks[sl]).map(sl => String(picks[sl].player_id)));
       const offer = (cell.squad || []).filter(p => !usedIds.has(String(p.player_id))).map(p => ({ name: p.name, positions: p.positions, value: +val(p).toFixed(2),
-        ranks: Object.fromEntries((p.positions || []).filter(x => SLOTS.includes(x)).map(x => [x, rankNum(p, x)])) }));
+        ranks: Object.fromEntries((p.positions || []).filter(x => SLOTS.includes(x)).map(x => [x, huntRank(p, x)])) }));
       // for the perfect-team hunt: each player's prime (if the game offers one) with its ranks, each pick's rank where
       // he plays, the #1 stint at every position, and what boosters and coins you have
       const bs = bestStints();
       for (const o of offer) { const p = (cell.squad || []).find(x => x.name === o.name && !usedIds.has(String(x.player_id))); const pr = p && primeOf(p, bs);
         if (pr) o.prime = { abbr: pr.team?.abbr || null, era: pr.era, value: +val(pr).toFixed(2),
-          ranks: Object.fromEntries(((pr.positions && pr.positions.length) ? pr.positions : p.positions || []).filter(x => SLOTS.includes(x)).map(x => [x, rankNum(pr, x)])) }; }
-      const targets = Object.fromEntries(SLOTS.map(sl => { let best = null;
-        for (const q of squads()) for (const x of q.squad) if ((x.positions || []).includes(sl) && (!best || val(x) > best.v)) best = { name: x.name, abbr: q.team?.abbr, team_id: String(q.team?.team_id), era: q.era, v: val(x) };
-        return [sl, best]; }));
+          ranks: Object.fromEntries(((pr.positions && pr.positions.length) ? pr.positions : p.positions || []).filter(x => SLOTS.includes(x)).map(x => [x, huntRank({ ...pr, player_id: pr.player_id ?? p.player_id }, x)])) }; }
+      const targets = Object.fromEntries(SLOTS.map(sl => { const x = perfect().lineup[sl];
+        return [sl, x ? { name: x.name, abbr: x.abbr, team_id: String(x.team_id), era: x.era, v: val(x) } : null]; }));
       // re-roll odds for the hunt, per position: the chance one team re-roll (same era) or one era re-roll (same club)
       // lands a squad holding that position's #1 (directly, or by priming someone), and era-then-team in two steps
       const huntOdds = (() => { const qs = squads(), top = {}, eraTeams = {}, clubEras = {}, ok = {};
         for (const sl of SLOTS) top[sl] = Math.max(...qs.flatMap(q => q.squad).filter(x => (x.positions || []).includes(sl)).map(val));
         for (const q of qs) { const tid = String(q.team?.team_id); (eraTeams[q.era] ||= new Set()).add(tid); (clubEras[tid] ||= new Set()).add(q.era); }
-        const isOne = (x, sl) => (x.positions || []).includes(sl) && val(x) >= top[sl] - 1e-9;
+        const isOne = (x, sl) => perfect().pairs.has(stintKey(x) + '>' + sl);
         for (const q of qs) for (const sl of SLOTS) if (q.squad.some(x => isOne(x, sl) || (x.prime && isOne({ ...x.prime, positions: x.prime.positions?.length ? x.prime.positions : x.positions }, sl)) || (() => { const g = bs.get(String(x.player_id)); return g && !(String(g.team_id) === String(q.team?.team_id) && g.era === q.era) && isOne({ ...g, positions: g.positions?.length ? g.positions : x.positions }, sl); })()))
           (ok[sl] ||= new Set()).add(String(q.team?.team_id) + '|' + q.era);
         const curT = String(cell.team?.team_id), curE = cell.era, out = {};
@@ -593,7 +611,7 @@
           out[sl] = { team: +team.toFixed(3), era: +era.toFixed(3), eraTeam: +eraTeam.toFixed(3) }; }
         return out; })();
       publish(a.act?.next || 'NONE', { ...(a.act || { type: 'NONE' }), club: cell.team?.abbr, clubId: String(cell.team?.team_id), era: cell.era, huntOdds,
-        picked: SLOTS.filter(sl => picks[sl]).map(sl => ({ slot: sl, name: picks[sl].name, rank: rankNum(picks[sl], sl), positions: picks[sl].positions || [] })),
+        picked: SLOTS.filter(sl => picks[sl]).map(sl => ({ slot: sl, name: picks[sl].name, rank: huntRank(picks[sl], sl), positions: picks[sl].positions || [] })),
         offer, targets, boosters: cell.boosters || {}, coins });
     } else publish('WAIT', { type: 'WAIT' });
     if (!result && !cell) body = 'Waiting for the next spin or pick. Run this before your first spin so it can follow the whole game.';
@@ -636,7 +654,7 @@
   // ---------- settings (cog): which events make Auto stop and alert you ----------
   const SETTINGS_KEY = 'r82c-settings';
   const SETTING_DEFS = [
-    ['stop82', 'Stop on an 32-0 result'],
+    ['stop82', 'Stop on a 32-0 result'],
     ['no1', 'Stop when a #1-ranked player is on offer'],
     ['startS', 'After 2+ S-tier picks to start a draft, spin the next roll then stop'],
     ['trade', 'Stop when you have an S-tier player and a trade is available'],
@@ -644,7 +662,10 @@
     ['double', 'Stop when you have an S-tier player and two S-tier players are on offer (double pick)'],
   ];
   let SETTINGS = {}; try { SETTINGS = JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch (e) {}
-  for (const [k] of SETTING_DEFS) if (SETTINGS[k] === undefined) SETTINGS[k] = false;   // College: all off, so data runs go unattended (switch on in the cog)
+  // all on by default, as in the NBA overlay. The data-collection builds (cv1-cv4) saved them off, so they are switched
+  // back on once (settings version 2); after that your own choices in the cog stick.
+  if (SETTINGS._v !== 2) { for (const [k] of SETTING_DEFS) SETTINGS[k] = true; SETTINGS._v = 2; try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(SETTINGS)); } catch (e) {} }
+  for (const [k] of SETTING_DEFS) if (SETTINGS[k] === undefined) SETTINGS[k] = true;
   if (!(SETTINGS.batch >= 10)) SETTINGS.batch = 100;   // games per batch; Auto rests a minute between batches
   window.r82settings = () => ({ ...SETTINGS });
   let showSettings = false;
@@ -670,9 +691,11 @@
     const tone = st?.tone, bg = tone === 'gold' ? '#a16207' : tone === 'warn' ? '#9a3412' : tone ? '#991b1b' : 'rgba(255,255,255,.06)';
     const counts = st ? `${st.version || ''} &middot; games ${st.games}/${st.gamesEnd ?? ''} &middot; picks ${st.picks} &middot; restarts ${st.restarts}${st.errors ? ` &middot; <b>errors ${st.errors}</b>` : ''} &middot; ${st.coinsGained == null ? 'coins ?' : `+${st.coinsGained} coins`}` : driverLoading ? 'loading&hellip;' : 'off';
     const cv = coverage(), msg = (st?.msg ? `<div style="margin-top:2px">${st.msg}</div>` : '') + `<div style="margin-top:2px;opacity:.85">Squads ${cv.squads} &middot; new in last ${cv.of} rolls: ${cv.newIn} &middot; ${LOG.games.length} games logged</div>`;
-    return `<div style="margin:2px -3px 5px;padding:5px 7px;border-radius:6px;background:${bg};font-size:12px"><b>Auto</b> ${st ? (running ? (st.mode === 'wilt' ? '&middot; WILT HUNT' : st.mode === 'perfect' ? '&middot; PERFECT HUNT' : '&middot; running') : st.foundWilt ? '&middot; Wilt found' : '&middot; paused') : ''} <small style="opacity:.8">${counts}</small>${msg}`
+    return `<div style="margin:2px -3px 5px;padding:5px 7px;border-radius:6px;background:${bg};font-size:12px"><b>Auto</b> ${st ? (running ? (st.mode === 'wilt' ? '&middot; SHAQ HUNT' : st.mode === 'perfect' ? '&middot; PERFECT HUNT' : '&middot; running') : st.foundWilt ? '&middot; Wilt found' : '&middot; paused') : ''} <small style="opacity:.8">${counts}</small>${msg}`
       + `<div style="margin-top:4px;display:flex;gap:2px;flex-wrap:wrap">`
       + b('drv-auto', '&#9654; Auto', running && st.mode === 'advice', 'Play drafts by the advice, stopping on the alerts in settings')
+      + b('drv-wilt', '&#127919; Shaq', running && st.mode === 'wilt', 'Hunt for Shaq: the #1 C (Shaquille O\'Neal, LSU 1990s)')
+      + b('drv-perfect', '&#127942; Perfect', running && st.mode === 'perfect', 'Hunt for the perfect team: the best five players the game can give you')
       + (running ? b('drv-pause', '&#10074;&#10074; Pause', false, 'Pause') : st ? b('drv-resume', 'Resume', false, 'Carry on in the current mode') : '')
       + (st ? b('drv-cam', st.armed ? '&#128247; armed' : st.canCapture ? '&#128247; arm' : '&#128247; manual', st.armed, st.canCapture ? 'Screenshot an 32-0 result (asks to share this tab)' : 'This device can\'t capture: overlays hide on 32-0 for your own screenshot') : '')
       + `</div></div>`;
@@ -689,10 +712,10 @@
     const ctl = `<div style="position:relative;z-index:3;float:right;margin:-2px -3px 2px 6px"><span data-r82="how" style="${BTN}${how ? ';background:rgba(255,255,255,.4)' : ''}" title="How players are valued">?</span><span data-r82="info" style="${BTN}${info ? ';background:rgba(255,255,255,.4)' : ''}" title="Details">i</span><span data-r82="cog" style="${BTN}${showSettings ? ';background:rgba(255,255,255,.4)' : ''}" title="Settings">&#9881;</span><span data-r82="off" style="${BTN}" title="Hide for 10 seconds">&times;</span></div>`;
     const { banner, body, resultRows } = compute();
     const all = Object.keys({ ...SITE, ...LOG.squads }).length, onlyLocal = Object.keys(LOG.squads).filter(k => !SITE[k]).length;
-    const foot = `<br><small>${all} squads in use (${Object.keys(SITE).length} shared${onlyLocal ? `, ${onlyLocal} new on this device` : ''})${siteNote ? ' &middot; ' + esc(siteNote) : ''}<br>${LOG.games.length} games (${LOG.games.filter(g => g.explore).length} data games), ${Object.keys(LOG.squads).length} squads logged<br>Coverage: ${(c => `${c.squads} squads, ${c.clubs} clubs, eras ${c.eras.join(' ')}; new in last ${c.of} rolls: ${c.newIn}`)(coverage())} &middot; <span data-r82="export" style="text-decoration:underline;cursor:pointer">export log</span>${note ? ' &middot; ' + esc(note) : ''}<br>32-0 overlay ${VERSION} &middot; model from ${MODEL.GAMES} games</small>`;
+    const foot = `<br><small>${all} squads in use (${Object.keys(SITE).length} shared${onlyLocal ? `, ${onlyLocal} new on this device` : ''})${siteNote ? ' &middot; ' + esc(siteNote) : ''}<br>${LOG.games.length} games (${LOG.games.filter(g => g.explore).length} data games), ${Object.keys(LOG.squads).length} squads logged<br>Perfect team: ${(P => SLOTS.map(sl => P.lineup[sl] ? `${sl} ${esc(P.lineup[sl].name)} (${esc(P.lineup[sl].abbr || '?')} ${esc(P.lineup[sl].era)})` : sl + ' ?').join(', ') + (P.score != null ? ` = ${P.score.toFixed(1)}` : ''))(perfect())}<br>Coverage: ${(c => `${c.squads} squads, ${c.clubs} clubs, eras ${c.eras.join(' ')}; new in last ${c.of} rolls: ${c.newIn}`)(coverage())} &middot; <span data-r82="export" style="text-decoration:underline;cursor:pointer">export log</span>${note ? ' &middot; ' + esc(note) : ''}<br>32-0 overlay ${VERSION} &middot; model from ${MODEL.GAMES} games</small>`;
     const warn = siteNote && /NOT LOADED/.test(siteNote) ? `<small style="color:#ffb74d">${esc(siteNote)}</small>` : '';
     if (mode === 'min') P.innerHTML = banner || '<b>32-0 overlay</b>';
-    else P.innerHTML = ctl + banner + (showSettings ? settingsHtml() : '') + driverBar() + (how ? `<div style="font-size:12px;line-height:1.45">${explain()}</div>` : info ? body + foot : (warn || (resultRows ? body : cell || result ? '' : body))) + (`<div style="font-size:10px;opacity:.55;margin-top:2px">tap to minimise &middot; drag to move &middot; &times; hides for 10s &middot; ${VERSION}</div>`);
+    else P.innerHTML = ctl + (/^LOG NOT SAVED/.test(note) ? `<div style="background:#8b0000;color:#fff;border-radius:5px;padding:3px 7px;margin:0 0 4px;font-weight:700">${esc(note)} Games since then are only in this tab: open i &rarr; export log before reloading.</div>` : '') + banner + (showSettings ? settingsHtml() : '') + driverBar() + (how ? `<div style="font-size:12px;line-height:1.45">${explain()}</div>` : info ? body + foot : (warn || (resultRows ? body : cell || result ? '' : body))) + (`<div style="font-size:10px;opacity:.55;margin-top:2px">tap to minimise &middot; drag to move &middot; &times; hides for 10s &middot; ${VERSION}</div>`);
   }
 
   let sessLeague = null, ignoredLeague = '';   // league from the session/start request (else ?league= in the address)

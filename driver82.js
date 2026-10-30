@@ -7,7 +7,7 @@
   window.r82drv = true;
 
   // ---------- settings ----------
-  const DRIVER_VERSION = 'd31';   // shown in the status box so you can tell which driver is loaded
+  const DRIVER_VERSION = 'd32';   // shown in the status box so you can tell which driver is loaded
   const MAX_GAMES  = 100;    // stop after this many finished games (one batch; Resume starts another)
   const MAX_RESTARTS = 400;  // Wilt hunt: stop after this many abandoned drafts
   // mode: 'advice' plays every draft by the overlay's advice; 'wilt' hunts for the #1 C (Wilt Chamberlain, PHI 1960s):
@@ -161,7 +161,7 @@
       persist('screenshot saved', { file: name }); return name;
     } catch (e) { persist('screenshot failed', { msg: e.message }); return false; }
     finally { hide.forEach((el, i) => { el.style.visibility = was[i]; }); } }
-  let looping = false, foundWilt = false;
+  let looping = false, foundWilt = false, logAlerted = false;
   const alerted = new Set();   // rolls / drafts already alerted, so Resume carries on instead of alerting again
   function alertStop(msg) {
     stopped = true; persist('alert', { msg });
@@ -444,6 +444,8 @@
     const flag = checkRedFlags(); if (flag) { await fail('unexpected prompt: ' + flag, true); break; }
     await whileHidden();
     if (!/\/draft/.test(location.pathname)) { if (!(await backToDraft())) break; await sleep(1500); continue; }
+    // the overlay couldn't save its log: stop once so the games played so far can be exported before anything reloads
+    if (window.r820?.logError && !logAlerted) { logAlerted = true; await fail(`the overlay can't save its log (${window.r820.logError}). Export it now (i → export log), then press Resume`, true); break; }
     const stray = findClaim() || byText(/tap anywhere/i)[0];
     if (stray) { await click(stray, txt(stray).toUpperCase() || 'popup'); if (DRY_RUN) await sleep(2000); continue; }
     const seq = window.r820.seq, next = window.r820.next || 'WAIT', parts = next.split('|');

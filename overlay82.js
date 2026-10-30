@@ -9,7 +9,7 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null, league: 'nba' };
-  const VERSION = 'v69';
+  const VERSION = 'v70';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -46,11 +46,11 @@
   let note = '';
   const save = () => {
     const body = () => JSON.stringify({ ...LOG, squads: undefined, squadsC: compactSquads(LOG.squads) });
-    try { localStorage.setItem(LOG_KEY, body()); if (/^LOG NOT SAVED/.test(note)) note = ''; }
+    try { localStorage.setItem(LOG_KEY, body()); if (/^LOG NOT SAVED/.test(note)) note = ''; if (window.r820) window.r820.logError = ''; }
     catch (e) {
       // still too big: drop the small diagnostic lists (they're only samples), keep games and squads
       LOG.recentActions = (LOG.recentActions || []).slice(-10); LOG.boosterSamples = (LOG.boosterSamples || []).slice(-5); LOG.cellSamples = (LOG.cellSamples || []).slice(-5);
-      try { localStorage.setItem(LOG_KEY, body()); note = ''; } catch (e2) { note = 'LOG NOT SAVED (storage full): export the log now so nothing is lost. ' + e2.message; } } };
+      try { localStorage.setItem(LOG_KEY, body()); note = ''; } catch (e2) { note = 'LOG NOT SAVED (storage full): export the log now so nothing is lost. ' + e2.message; if (window.r820) window.r820.logError = e2.message || 'storage full'; } } };
 
   // ---------- model ----------
   const val = p => { const s = p?.stats || {}; return STATS.reduce((a, k) => a + MODEL[k] * (+s[k] || 0), 0) + (s.spg == null && s.bpg == null ? MODEL.NO_DEF : 0); };
@@ -669,7 +669,7 @@
     const foot = `<br><small>${all} squads in use (${Object.keys(SITE).length} shared${onlyLocal ? `, ${onlyLocal} new on this device` : ''})${siteNote ? ' &middot; ' + esc(siteNote) : ''}<br>${LOG.games.length} games, ${Object.keys(LOG.squads).length} squads logged &middot; <span data-r82="export" style="text-decoration:underline;cursor:pointer">export log</span>${note ? ' &middot; ' + esc(note) : ''}<br>82-0 overlay ${VERSION} &middot; model from ${MODEL.GAMES} games</small>`;
     const warn = siteNote && /NOT LOADED/.test(siteNote) ? `<small style="color:#ffb74d">${esc(siteNote)}</small>` : '';
     if (mode === 'min') P.innerHTML = banner || '<b>82-0 overlay</b>';
-    else P.innerHTML = ctl + banner + (showSettings ? settingsHtml() : '') + driverBar() + (how ? `<div style="font-size:12px;line-height:1.45">${explain()}</div>` : info ? body + foot : (warn || (resultRows ? body : cell || result ? '' : body))) + (`<div style="font-size:10px;opacity:.55;margin-top:2px">tap to minimise &middot; drag to move &middot; &times; hides for 10s &middot; ${VERSION}</div>`);
+    else P.innerHTML = ctl + (/^LOG NOT SAVED/.test(note) ? `<div style="background:#8b0000;color:#fff;border-radius:5px;padding:3px 7px;margin:0 0 4px;font-weight:700">${esc(note)} Games since then are only in this tab: open i &rarr; export log before reloading.</div>` : '') + banner + (showSettings ? settingsHtml() : '') + driverBar() + (how ? `<div style="font-size:12px;line-height:1.45">${explain()}</div>` : info ? body + foot : (warn || (resultRows ? body : cell || result ? '' : body))) + (`<div style="font-size:10px;opacity:.55;margin-top:2px">tap to minimise &middot; drag to move &middot; &times; hides for 10s &middot; ${VERSION}</div>`);
   }
 
   let sessLeague = null, ignoredLeague = '';   // league from the session/start request (else ?league= in the address)

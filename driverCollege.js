@@ -1,5 +1,5 @@
-// 32-0 COLLEGE auto-driver (built from the NBA driver d30), loaded by the College overlay's Auto button. College Classic only,
-// own storage keys (r82c-*), never spends coins. Plays Classic drafts by following the overlay's instruction (window.r820.next), clicking the
+// 32-0 COLLEGE auto-driver (built from the NBA driver d31), loaded by the College overlay's Auto button. College Classic only,
+// own storage keys (r82c-*). Same modes, alerts and coin rules as the NBA driver. Plays Classic drafts by following the overlay's instruction (window.r820.next), clicking the
 // page itself. No AI round-trips, so a pick takes a few seconds instead of 10-15.
 // Needs overlay v30+. Never re-rolls, never uses any booster, never spends coins, never watches ads.
 // Stop at any time with:  r82stop()      Status: the small box at the top-left of the page.
@@ -9,14 +9,13 @@
   window.r82drv = true;
 
   // ---------- settings ----------
-  const DRIVER_VERSION = 'cd2';   // shown in the status box so you can tell which driver is loaded
+  const DRIVER_VERSION = 'cd5';   // shown in the status box so you can tell which driver is loaded
   const MAX_GAMES  = 100;    // stop after this many finished games (one batch; Resume starts another)
   const MAX_RESTARTS = 400;  // Wilt hunt: stop after this many abandoned drafts
   // mode: 'advice' plays every draft by the overlay's advice; 'wilt' hunts for the #1 C (Wilt Chamberlain, PHI 1960s):
   // keeps C free, takes only S-grade (top 10) players elsewhere, abandons any draft with no S-grade player on offer,
   // and pauses for you the moment the #1 C appears.
-  const MODES = ['advice'];   // College: no Wilt or Perfect hunts
-  const SPEND_COINS = false;   // College data runs: free and owned re-rolls only, never coins
+  const MODES = ['advice', 'wilt', 'perfect'];
   let MODE = MODES.includes(window.r82mode) ? window.r82mode : 'advice';
   // caps apply per batch: when one is reached the driver stops, and pressing Resume / Auto / Wilt starts a new batch
   // games per batch comes from the overlay's settings (default 100); between batches Auto pauses BATCH_REST_MS then carries on
@@ -30,7 +29,7 @@
   // Auto plays every draft to the end instead of quitting weak ones: quitting has twice reloaded the whole page
   // (which stops the driver), and a full game still earns coins and adds data. The Wilt hunt still quits.
   const AUTO_QUITS = false;
-  const HUNT_TOP_C = 2;   // pause when a C ranked this high or better is on offer: #1 and #2 are both Wilt (SFW and PHI 1960s)
+  const HUNT_TOP_C = 1;   // College: pause when the #1 C is on offer (Shaquille O'Neal, LSU 1990s: one stint, so only #1)
   let sPicks = 0;
   const GAP_MS     = 700;    // pause between actions (human pace; don't go much lower)
   const COURT_MS   = 1700;   // the court slides in after a player is selected; clicks before this are ignored
@@ -103,7 +102,7 @@
       box.innerHTML = `<b>32-0</b> ${MODE === 'wilt' ? '&#127919;' : ''} G ${games} &middot; ${g == null ? '?' : '+' + g}c${errors ? ' &middot; err ' + errors : ''}${lastTone && lastTone !== 'warn' ? ' &middot; <b>' + (lastTone === 'gold' ? 'FOUND' : 'STOPPED') + '</b>' : ''} <button data-d="cam" title="${shotStream ? 'Screenshots armed (click for a test shot)' : 'Arm 32-0 screenshots'}" style="${BTN};margin:0 0 0 4px;padding:0 6px${shotStream ? ';background:#16a34a;color:#fff' : ''}">&#128247;</button><button data-d="mini" title="Expand" style="${BTN};margin:0 0 0 4px;padding:0 6px">+</button>`;
       return; }
     box.style.padding = '6px 8px';
-    box.innerHTML = `<button data-d="mini" title="Shrink" style="${BTN};float:right;margin:0 0 0 6px;padding:0 6px">&minus;</button><b>32-0 driver ${DRIVER_VERSION}</b> ${MODE === 'wilt' ? '&middot; WILT HUNT' : ''} ${DRY_RUN ? '(DRY RUN)' : ''}<br>games ${games}/${gamesEnd} &middot; picks ${picks} &middot; restarts ${restarts}${errors ? ` &middot; <b>errors ${errors}</b>` : ''} &middot; ${coinText()}<br>${lastMsg}<br>`
+    box.innerHTML = `<button data-d="mini" title="Shrink" style="${BTN};float:right;margin:0 0 0 6px;padding:0 6px">&minus;</button><b>32-0 driver ${DRIVER_VERSION}</b> ${MODE === 'wilt' ? '&middot; SHAQ HUNT' : ''} ${DRY_RUN ? '(DRY RUN)' : ''}<br>games ${games}/${gamesEnd} &middot; picks ${picks} &middot; restarts ${restarts}${errors ? ` &middot; <b>errors ${errors}</b>` : ''} &middot; ${coinText()}<br>${lastMsg}<br>`
       + (looping && !stopped ? `<button data-d="pause" style="${BTN}">Pause</button>` : `<button data-d="resume" style="${BTN}">Resume</button>`)
       + (canCapture ? `<button data-d="cam" title="${shotStream ? 'Screenshots armed: an 32-0 result is saved as a picture. Click to take a test shot.' : 'Allow the driver to screenshot this tab when a game goes 32-0'}" style="${BTN}${shotStream ? ';background:#16a34a;color:#fff' : ''}">&#128247; ${shotStream ? 'armed' : 'arm'}</button>`
                     : `<button data-d="cam" title="This device can't capture the screen: on an 32-0 the overlays hide so you can screenshot it yourself; tap anywhere to bring them back. Click to try it." style="${BTN}">&#128247; manual</button>`); };
@@ -164,7 +163,7 @@
       persist('screenshot saved', { file: name }); return name;
     } catch (e) { persist('screenshot failed', { msg: e.message }); return false; }
     finally { hide.forEach((el, i) => { el.style.visibility = was[i]; }); } }
-  let looping = false, foundWilt = false;
+  let looping = false, foundWilt = false, logAlerted = false;
   const alerted = new Set();   // rolls / drafts already alerted, so Resume carries on instead of alerting again
   function alertStop(msg) {
     stopped = true; persist('alert', { msg });
@@ -447,6 +446,8 @@
     const flag = checkRedFlags(); if (flag) { await fail('unexpected prompt: ' + flag, true); break; }
     await whileHidden();
     if (!/\/draft/.test(location.pathname)) { if (!(await backToDraft())) break; await sleep(1500); continue; }
+    // the overlay couldn't save its log: stop once so the games played so far can be exported before anything reloads
+    if (window.r820?.logError && !logAlerted) { logAlerted = true; await fail(`the overlay can't save its log (${window.r820.logError}). Export it now (i → export log), then press Resume`, true); break; }
     { const lg = new URLSearchParams(location.search).get('league'); if (lg && lg !== 'ncaab') { await fail(`this draft is ${lg}, not College: stopped so nothing is mixed`, true); break; } }
     const stray = findClaim() || byText(/tap anywhere/i)[0];
     if (stray) { await click(stray, txt(stray).toUpperCase() || 'popup'); if (DRY_RUN) await sleep(2000); continue; }
@@ -481,7 +482,7 @@
       const primeWilt = open.includes('C') && offer.find(p => p.prime && p.prime.ranks && p.prime.ranks.C === 1 && !(p.ranks && p.ranks.C === 1));
       if (primeWilt) { const how = canUse('prime', st.coins);
         if (how) {
-          say(`Wilt hunt: priming ${primeWilt.name} (${primeWilt.prime.abbr} ${primeWilt.prime.era}) into the #1 C [${how}]`, 'warn');
+          say(`Shaq hunt: priming ${primeWilt.name} (${primeWilt.prime.abbr} ${primeWilt.prime.era}) into the #1 C [${how}]`, 'warn');
           persist('booster', { kind: 'prime', player: primeWilt.name, slot: 'C', how, mode: 'wilt' });
           const last = (st.picked || []).length === 4;
           if (!(await primeInto(primeWilt.name, 'C', how, last, seq))) break;
@@ -490,7 +491,7 @@
           try { const ac = new AudioContext(), o = ac.createOscillator(); o.frequency.value = 880; o.connect(ac.destination); o.start(); o.stop(ac.currentTime + 0.4); } catch (e) {}
           break; }
         const b = (st.boosters || {}).prime || {};
-        say(`Wilt hunt: ${primeWilt.name} could be primed into the #1 C, but no prime can be used (owned ${b.owned_left ?? '?'}, ${st.coins ?? '?'} coins)`, 'warn'); }
+        say(`Shaq hunt: ${primeWilt.name} could be primed into the #1 C, but no prime can be used (owned ${b.owned_left ?? '?'}, ${st.coins ?? '?'} coins)`, 'warn'); }
       const wilt = offer.filter(p => p.ranks && p.ranks.C <= HUNT_TOP_C).sort((a, b) => a.ranks.C - b.ranks.C)[0];
       if (wilt) { foundWilt = true; stopped = true;
         say(`FOUND the #${wilt.ranks.C} C: ${wilt.name} ${st.club} ${st.era} (value ${wilt.value}). Your turn. Press Resume to let it finish this draft on the overlay's advice.`, 'gold');
@@ -539,7 +540,7 @@
     // Re-rolls that need an ad are never used; any other re-roll advice takes the "otherwise" pick.
     if (kind.startsWith('REROLL') && MODE === 'advice' && (window.r820?.state?.picked?.length || 0) === 4) {
       const cost = String(window.r820?.state?.cost || ''), scope = kind === 'REROLL_ERA' ? 'era' : 'team';
-      if (cost === 'free' || /owned/i.test(cost) || (SPEND_COINS && /coins/i.test(cost))) {
+      if (cost === 'free' || /owned/i.test(cost) || /coins/i.test(cost)) {
         const btn = byLabel(new RegExp('^respin ' + scope, 'i'));
         if (btn && !/\(0 left\)/i.test(btn.getAttribute('aria-label') || '')) {
           say(`final pick: using the ${scope} re-roll (${cost})`);
@@ -832,7 +833,7 @@
     } finally { inRecovery = false; }
   }
   async function runLoop() {
-    looping = true; say(MODE === 'wilt' ? 'hunting for Wilt (#1 or #2 C)' : MODE === 'perfect' ? 'hunting for the perfect team (#1 at every position)' : 'running');
+    looping = true; say(MODE === 'wilt' ? 'hunting for Shaq (the #1 C)' : MODE === 'perfect' ? 'hunting for the perfect team (#1 at every position)' : 'running');
     while (true) {
       needRecover = null;
       await innerLoop();
