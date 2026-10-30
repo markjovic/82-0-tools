@@ -7,7 +7,7 @@
   window.r82drv = true;
 
   // ---------- settings ----------
-  const DRIVER_VERSION = 'd30';   // shown in the status box so you can tell which driver is loaded
+  const DRIVER_VERSION = 'd31';   // shown in the status box so you can tell which driver is loaded
   const MAX_GAMES  = 100;    // stop after this many finished games (one batch; Resume starts another)
   const MAX_RESTARTS = 400;  // Wilt hunt: stop after this many abandoned drafts
   // mode: 'advice' plays every draft by the overlay's advice; 'wilt' hunts for the #1 C (Wilt Chamberlain, PHI 1960s):
@@ -574,6 +574,7 @@
     const last = (window.r820?.state?.picked?.length || 0) >= 4;
     if (!last && !(await spin(false))) { await fail('placed the player but found no SPIN button to send the pick'); break; }
     if (!(await waitSeq(seq))) {   // one retry: the court may not have been ready, so place again and re-send
+      if (stopped) break;   // paused (or stopped) while the pick was going through: click nothing more
       const s = slotEl(slot); if (s) { say(`retrying ${slot} for ${name}`); await click(s, slot); if (!last) await spin(false); }
       if (!(await waitSeq(seq))) { await fail(`pick of ${name} → ${slot} did not register`); break; }
     }

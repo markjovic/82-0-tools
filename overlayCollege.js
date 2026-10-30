@@ -11,20 +11,21 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null, league: 'ncaab' };
-  const VERSION = 'cv2';
+  const VERSION = 'cv3';
   const LOG_KEY = 'r82c-log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
   // Refitted 28 Oct 2026 from 1,499 logged games (the 138.4 outlier left out); 10-fold check error 0.35. Team blocks have a bend: below BPG_BEND team blocks, each block is worth
   // BPG_EXTRA more (low-block teams are penalised harder). : team score = sum of player values + BASE.
   // A player with no steals/blocks on record (1960s, early 1970s) gets NO_DEF instead.
-  // College model, fitted 30 Oct 2026 from 24 games (25 logged; the one with a 1980s player missing steals/blocks left out).
-  // Leave-one-out error 0.63. Steals and blocks are the least certain weights (90% ranges 0.82-1.14 and 0.60-1.08).
+  // College model, fitted 30 Oct 2026 from 32 games (33 logged; the one with a 1980s player missing steals/blocks left out).
+  // Leave-one-out error 0.54; the 24-game fit predicted the next 8 games within 0.73. Steals and blocks are the least
+  // certain weights (90% ranges 0.84-1.08 and 0.68-0.97).
   // No blocks bend yet: too few games to test one. Players with no steals/blocks on record count those as 0 (untested).
-  const MODEL = { ppg: 0.4453, rpg: 0.7852, apg: 1.0445, spg: 0.9775, bpg: 0.7848, NO_DEF: 0, BASE: 1.656, BPG_BEND: 2.5, BPG_EXTRA: 0, GAMES: 24, PROVISIONAL: true };
+  const MODEL = { ppg: 0.4508, rpg: 0.7773, apg: 1.0472, spg: 0.9563, bpg: 0.8035, NO_DEF: 0, BASE: 1.5099, BPG_BEND: 2.5, BPG_EXTRA: 0, GAMES: 32, PROVISIONAL: true };
   // Score to wins: a power curve that matches all 132 games exactly (a straight line missed the 102.7 game).
   // 82 wins needs a score between 119.27 and 119.36 (narrowed by the 112.0 game); the upper end is used.
-  const winsFor = s => Math.max(0, Math.min(32, Math.round(32 * Math.pow(Math.max(0, s) / 112.25, 1.145))));   // exact on all 25 College games (30 Oct)
+  const winsFor = s => Math.max(0, Math.min(32, Math.round(32 * Math.pow(Math.max(0, s) / 112.25, 1.145))));   // exact on all 33 College games (30 Oct)
   const SCORE_82 = 111.0;   // 32-0 line: 110.5-111.0 fits every game so far; the upper end is used
   const SIMS = 800;
   const COIN_COST = 100;   // coins per re-roll once free / owned ones are used (as the game shows it)
@@ -528,7 +529,7 @@
     lines.push(`<b>Player value</b> = ${f(W.ppg)} &times; PPG + ${f(W.rpg)} &times; RPG + ${f(W.apg)} &times; APG + ${f(W.spg)} &times; SPG + ${f(W.bpg)} &times; BPG`);
     lines.push(`<small>Steals and blocks count about 2&ndash;4&times; a point or assist. Players with no steals/blocks on record (1960s, early 1970s) get a flat +${f(W.NO_DEF, 2)} instead.</small>`);
     lines.push(`<b>Team score</b> = the five values ${W.BASE < 0 ? '&minus;' : '+'} ${f(Math.abs(W.BASE), 2)}, plus ${f(W.BPG_EXTRA, 2)} for each team block up to ${f(W.BPG_BEND, 1)} <small>(so a team short on blocks is penalised harder)</small>`);
-    lines.push(`<b>Record</b> = 32 &times; (score &divide; 112.25)<sup>1.145</sup>, rounded (fitted on 25 games). 32-0 needs a score of ${SCORE_82}.`);
+    lines.push(`<b>Record</b> = 32 &times; (score &divide; 112.25)<sup>1.145</sup>, rounded (fitted on 33 games). 32-0 needs a score of ${SCORE_82}.`);
     lines.push(`<b>Grades</b> rank a player against every club/era stint at that position: S top 10, A+ top 25, A top 50, B top 100, C top 200.`);
     const rec_ = cache?.rec;
     if (rec_ && cell) {
