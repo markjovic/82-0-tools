@@ -11,7 +11,7 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null, league: 'ncaab' };
-  const VERSION = 'cv10';
+  const VERSION = 'cv11';
   const LOG_KEY = 'r82c-log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -194,9 +194,9 @@
     ? `<span style="background:#f5c542;color:#1a1a1a;font-weight:800;padding:0 5px;border-radius:4px;box-shadow:0 0 6px #f5c542">&#9733; #1 ${sl}</span>`
     : rk <= 10 ? `<span style="border:1px solid #fde68a;color:#fde68a;font-weight:700;padding:0 4px;border-radius:4px">#${rk} ${sl}</span>` : `#${rk} ${sl}`;
   // The game's own grades, read off 123 logged results: D up to 49 wins, C 50-55, B 56-61, A 62-71, A+ 72 and up.
-  // The game's College grades (333 games): F Hot seat 0-12, D Bubble 13-19, C Tourney 20-22, B Contender 23-24, A Dynasty 25-28,
-  // A+ Historic 29-30. 31-32 not seen yet (assumed A+).
-  const GRADES = [[29, 'A+', 'Historic', '#047857'], [25, 'A', 'Dynasty', '#16a34a'], [23, 'B', 'Contender', '#0e7490'], [20, 'C', 'Tourney', '#475569'], [13, 'D', 'Bubble', '#9a3412'], [0, 'F', 'Hot seat', '#b91c1c']];
+  // The game's College grades (392 games): F Hot seat 0-12, D Bubble 13-19, C Tourney 20-22, B Contender 23-24, A Dynasty 25-28,
+  // A+ Historic 29-30, S Legendary 31, S+ Perfect 32.
+  const GRADES = [[32, 'S+', 'Perfect', '#b8860b'], [31, 'S', 'Legendary', '#a16207'], [29, 'A+', 'Historic', '#047857'], [25, 'A', 'Dynasty', '#16a34a'], [23, 'B', 'Contender', '#0e7490'], [20, 'C', 'Tourney', '#475569'], [13, 'D', 'Bubble', '#9a3412'], [0, 'F', 'Hot seat', '#b91c1c']];
   const gradeOf = w => GRADES.find(g => w >= g[0]);
   const GOLD = '#a16207';   // reserved for a real 32-0 chance (1% or better)
   // Players can be moved between positions after they're picked, so a team is a SET of players that only needs
