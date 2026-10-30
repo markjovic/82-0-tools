@@ -9,7 +9,7 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null };
-  const VERSION = 'v67';
+  const VERSION = 'v68';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -118,10 +118,11 @@
     const v = val(p), r = RANKS[sl].filter(x => x > v + 1e-9).length + 1;
     return `#${r} ${sl}`; };
   const rankNum = (p, sl) => { posRank(p, sl); const v = val(p); return RANKS[sl].filter(x => x > v + 1e-9).length + 1; };
-  // a rank as shown everywhere: #1 on a gold pill, S-tier (2-10) on a pale gold pill, others plain. Pills read on any
-  // background (the coloured top bars included).
-  const rankHtml = (p, sl, rk = rankNum(p, sl)) => rk === 1 ? `<span style="background:#f5c542;color:#1a1a1a;font-weight:700;padding:0 4px;border-radius:4px">#1 ${sl}</span>`
-    : rk <= 10 ? `<span style="background:#fde68a;color:#1a1a1a;font-weight:700;padding:0 4px;border-radius:4px">#${rk} ${sl}</span>` : `#${rk} ${sl}`;
+  // a rank as shown everywhere: #1 is a solid, glowing gold pill with a star; S-tier (2-10) is a gold outline;
+  // everything else is plain text.
+  const rankHtml = (p, sl, rk = rankNum(p, sl)) => rk === 1
+    ? `<span style="background:#f5c542;color:#1a1a1a;font-weight:800;padding:0 5px;border-radius:4px;box-shadow:0 0 6px #f5c542">&#9733; #1 ${sl}</span>`
+    : rk <= 10 ? `<span style="border:1px solid #fde68a;color:#fde68a;font-weight:700;padding:0 4px;border-radius:4px">#${rk} ${sl}</span>` : `#${rk} ${sl}`;
   // The game's own grades, read off 123 logged results: D up to 49 wins, C 50-55, B 56-61, A 62-71, A+ 72 and up.
   const GRADES = [[72, 'A+', 'Historic', '#047857'], [62, 'A', 'Dynasty', '#16a34a'], [56, 'B', 'Contender', '#0e7490'], [50, 'C', 'Playoff', '#475569'], [0, 'D', 'Lottery', '#b91c1c']];
   const gradeOf = w => GRADES.find(g => w >= g[0]);
@@ -424,7 +425,7 @@
       else opts += `<div style="margin:1px 0"><b>${esc(e.c.p.name)}</b> <span style="font-size:11px;opacity:.7">(prime only)</span></div>${primeBit(e.c)}`;
     }
     let h = `Picked: ${team.length ? SLOTS.filter(sl => picks[sl]).map(sl => { const rk = rankNum(picks[sl], sl);
-      return `${sl} ${esc(picks[sl].name)}${picks[sl].primed ? ' (primed)' : ''} ${rankHtml(picks[sl], sl, rk).replace(' ' + sl + '<', '<').replace(new RegExp(' ' + sl + '$'), '')} ${val(picks[sl]).toFixed(1)}`; }).join(', ') : 'none yet'}`;
+      return `${sl} ${esc(picks[sl].name)}${picks[sl].primed ? ' (primed)' : ''} ${rankHtml(picks[sl], sl, rk).replace(' ' + sl + '</span>', '</span>').replace(new RegExp(' ' + sl + '$'), '')} ${val(picks[sl]).toFixed(1)}`; }).join(', ') : 'none yet'}`;
     if (!rerollOK) h += `<br><small>Re-roll advice: ${team.length < 3 ? `only after 3 players are picked (${team.length} so far)` : '82-0 is no longer reachable with this team, so a re-roll would be wasted'}.</small>`;
     for (const r of rr) h += `<br>&nbsp; <span style="color:${r.name === 'Era' ? '#c4b5fd' : '#fcd34d'}">${r.name} re-roll</span>: <b>${pct(r.p82)}</b>, ${rec(r.avg)} <small>(${r.n} squads seen)</small>`;
     if (boosts.length) { const bb = boosts.slice(0, 3).map(b => `${b.kind === 'DOUBLE' ? 'double pick ' + b.pair.map(q => esc(q.name)).join(' + ') : b.kind === 'TRADE' ? 'trade ' + esc(b.out.name) + ' for ' + esc(b.in.name) : 'prime ' + esc(b.p.name)}: ${pct(b.p82)}`).join('; ');
