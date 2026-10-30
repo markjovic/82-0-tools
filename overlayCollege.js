@@ -11,7 +11,7 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null, league: 'ncaab' };
-  const VERSION = 'cv8';
+  const VERSION = 'cv9';
   const LOG_KEY = 'r82c-log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -52,6 +52,11 @@
       const ids = new Set((s.squad || []).map(p => String(p.player_id))), extra = (q.squad || []).filter(p => !ids.has(String(p.player_id)));
       if (extra.length) out[k] = { ...q, squad: extra }; }
     return out; }
+  // how this site's browser storage is shared out (it's one allowance for everything on 82-0.com, NBA overlay included)
+  const storageReport = () => { const mb = n => (n / 1e6).toFixed(2) + ' MB'; let nba = 0, col = 0, other = 0;
+    try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i), n = k.length + (localStorage.getItem(k) || '').length;
+      if (/^r82c-/.test(k)) col += n; else if (/^r82/.test(k)) nba += n; else other += n; } } catch (e) { return 'storage could not be read: ' + e.message; }
+    return `Storage on 82-0.com: NBA overlay ${mb(nba)}, College ${mb(col)}, the game itself ${mb(other)} (browsers allow about 5 MB in total). Shared squads: ${siteNote ? esc(siteNote) : Object.keys(SITE).length + ' loaded'}.`; };
   let LOG = load();
   let note = '';
   const save = () => {
@@ -374,9 +379,13 @@
         primeCands.push({ kind: 'PRIME', p: pp, base: p, v: val(pp) }); }
       for (const c of primeCands.sort((a, b) => b.v - a.v).slice(0, 3)) boosts.push({ ...c, ...simulate(team, { p: c.p }, BSIMS) });
       const topOffer = offer.filter(p => feasible([...team, p])).sort((a, b) => val(b) - val(a)).slice(0, 5);
-      if (bAvail('double_pick') && team.length <= 3)          // double pick: two players from this list
-        for (let i = 0; i < topOffer.length; i++) for (let k = i + 1; k < topOffer.length; k++) {
-          const pair = [topOffer[i], topOffer[k]]; if (!feasible([...team, ...pair])) continue;
+      // double pick: only ever two S-tier players (top 10 at a position they can fill) from this list. In College
+      // a 32-0 is easy enough that two average players can clear the odds test, which isn't worth a booster.
+      const isS = p => SLOTS.some(sl => fits(p, sl) && rankNum(p, sl) <= 10);
+      const sOffer = topOffer.filter(isS);
+      if (bAvail('double_pick') && team.length <= 3)
+        for (let i = 0; i < sOffer.length; i++) for (let k = i + 1; k < sOffer.length; k++) {
+          const pair = [sOffer[i], sOffer[k]]; if (!feasible([...team, ...pair])) continue;
           boosts.push({ kind: 'DOUBLE', pair, ...simulate(team, { pair }, BSIMS) }); }
       if (bAvail('trade') && team.length)                     // trade: swap a drafted player for one on this list
         for (const inP of topOffer.slice(0, 4)) for (const outP of team) {
@@ -715,7 +724,7 @@
     const foot = `<br><small>${all} squads in use (${Object.keys(SITE).length} shared${onlyLocal ? `, ${onlyLocal} new on this device` : ''})${siteNote ? ' &middot; ' + esc(siteNote) : ''}<br>${LOG.games.length} games (${LOG.games.filter(g => g.explore).length} data games), ${Object.keys(LOG.squads).length} squads logged<br>Coverage: ${(c => `${c.squads} squads, ${c.clubs} clubs, eras ${c.eras.join(' ')}; new in last ${c.of} rolls: ${c.newIn}`)(coverage())} &middot; <span data-r82="export" style="text-decoration:underline;cursor:pointer">export log</span>${note ? ' &middot; ' + esc(note) : ''}<br>32-0 overlay ${VERSION} &middot; model from ${MODEL.GAMES} games</small>`;
     const warn = siteNote && /NOT LOADED/.test(siteNote) ? `<small style="color:#ffb74d">${esc(siteNote)}</small>` : '';
     if (mode === 'min') P.innerHTML = banner || '<b>32-0 overlay</b>';
-    else P.innerHTML = ctl + (/^LOG NOT SAVED/.test(note) ? `<div style="background:#8b0000;color:#fff;border-radius:5px;padding:3px 7px;margin:0 0 4px;font-weight:700">${esc(note)} Games since then are only in this tab: open i &rarr; export log before reloading.</div>` : '') + banner + (showSettings ? settingsHtml() : '') + driverBar() + (how ? `<div style="font-size:12px;line-height:1.45">${explain()}</div>` : info ? body + foot : (warn || (resultRows ? body : cell || result ? '' : body))) + (`<div style="font-size:10px;opacity:.55;margin-top:2px">tap to minimise &middot; drag to move &middot; &times; hides for 10s &middot; ${VERSION}</div>`);
+    else P.innerHTML = ctl + (/^LOG NOT SAVED/.test(note) ? `<div style="background:#8b0000;color:#fff;border-radius:5px;padding:3px 7px;margin:0 0 4px;font-weight:700">${esc(note)} Games since then are only in this tab: open i &rarr; export log before reloading.<div style="font-weight:400;font-size:11px;margin-top:3px">${storageReport()}</div></div>` : '') + banner + (showSettings ? settingsHtml() : '') + driverBar() + (how ? `<div style="font-size:12px;line-height:1.45">${explain()}</div>` : info ? body + foot : (warn || (resultRows ? body : cell || result ? '' : body))) + (`<div style="font-size:10px;opacity:.55;margin-top:2px">tap to minimise &middot; drag to move &middot; &times; hides for 10s &middot; ${VERSION}</div>`);
   }
 
   let sessLeague = null, ignoredLeague = '';   // league from the session/start request (else ?league= in the address)
