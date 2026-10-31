@@ -11,7 +11,7 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null, league: 'ncaab' };
-  const VERSION = 'cv13';
+  const VERSION = 'cv14';
   const LOG_KEY = 'r82c-log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -445,7 +445,8 @@
       const sub = `${pl.moves.length ? `<b>First move ${pl.moves.join(', then ')}.</b><br>` : ''}${pl.keep.length ? `Needs ${pl.keep.join(', ')}.<br>` : ''}${c.v.toFixed(1)} &middot; ${rankHtml(c.p, pl.slot)}<span style="position:absolute;right:9px;bottom:6px;font:800 15px/1 system-ui,sans-serif" title="S top 10 ${pl.slot}, A+ top 25, A top 50, B top 100, C top 200, D beyond">(${word})</span>`;
       return bar(bg, '#fff', head, sub); };
     let top_ = '';
-    const restart = !exploreGame && team.length === 0 && top && !['S', 'A+', 'A'].includes(tier(top)[1]);
+    // no restart when a booster (e.g. a prime) or a re-roll is already the advice: that rescues the first pick
+    const restart = !exploreGame && team.length === 0 && top && !useBoost && !better && !['S', 'A+', 'A'].includes(tier(top)[1]);
     if (!top) top_ = bar('#546e7a', '#fff', big('NOTHING TO PICK'), 'No player here can join your team in any arrangement.');
     else if (restart) top_ = bar('#991b1b', '#fff', big('RESTART THE GAME'), `Best here is ${esc(top.p.name)} &rarr; ${placement(top).slot}, ${top.v.toFixed(1)} (${tier(top)[1]}). A first pick outside the top 50 at his position leaves no realistic path.`);
     else if (useBoost) {
@@ -574,7 +575,7 @@
     // re-roll line, always visible: both options, the better one highlighted
     const rrLine = rr.length ? `<div style="margin:0 0 5px;font-size:12px">Re-roll: ${rr.map(r => `<span style="padding:1px 6px;border-radius:4px;${r === preferredRR ? `background:${r.name === 'Era' ? '#7c3aed' : '#f59e0b'};color:${r.name === 'Era' ? '#fff' : '#1a1a1a'};font-weight:700` : 'opacity:.75'}">${r.name} ${pct(r.p82)} &middot; ${rec(r.avg)}</span>`).join(' ')}</div>` : '';
     act.explore = exploreGame;
-    cache = { sig, banner: (exploreGame ? '<div style="background:#334155;border-radius:5px;padding:2px 7px;margin:0 -3px 4px;font:700 11px system-ui,sans-serif">DATA GAME: random picks (for the model fit)</div>' : '') + top_ + oddsHtml + rrLine, opts: restart ? '' : opts, h, rec: top, act };
+    cache = { sig, banner: (exploreGame ? '<div style="background:#334155;border-radius:5px;padding:2px 7px;margin:0 -3px 4px;font:700 11px system-ui,sans-serif">DATA GAME: random picks (for the model fit)</div>' : '') + top_ + oddsHtml + rrLine, opts, h, rec: top, act };   // the options (with primes) show under RESTART too
     // keep what was shown for the last 40 rolls (plain text), so a roll that flashes past in Auto can be checked later
     { const plain = x => String(x).replace(/<br>|<\/div>/g, ' | ').replace(/<[^>]+>/g, ' ').replace(/&rarr;/g, '->').replace(/&middot;/g, '·').replace(/&#128081;/g, 'PRIME').replace(/&[a-z#0-9]+;/g, '').replace(/\s+/g, ' ').trim();
       LOG.shown = [...(LOG.shown || []).slice(-39), { at: new Date().toISOString(), roll: `${cell.team?.abbr} ${cell.era}`, seq: cell.seq,
