@@ -11,15 +11,15 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null, league: 'ncaab' };
-  const VERSION = 'cv11';
+  const VERSION = 'cv12';
   const LOG_KEY = 'r82c-log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
   // College model, fitted 30 Oct 2026 from 327 games (333 logged; 6 with a 1980s player missing steals or blocks fitted
   // separately). Error 0.45 points per team, leave-one-out 0.47; no bend, era effect or per-player curve improves it.
   // Team score = sum of player values + BASE. A player missing steals or blocks (about 3% of 1980s players) gets NO_DEF
-  // added: fitted on only 7 games and varies 0.1-3.6, so his value is rough (about +/-1.5).
-  const MODEL = { ppg: 0.4440, rpg: 0.7595, apg: 1.0464, spg: 1.0573, bpg: 0.9318, NO_DEF: 1.67, BASE: 1.3902, BPG_BEND: 2.5, BPG_EXTRA: 0, GAMES: 327, PROVISIONAL: false };
+  // added: fitted on 13 games (31 Oct), typical spread +/-1.0, so his value is rough.
+  const MODEL = { ppg: 0.4440, rpg: 0.7595, apg: 1.0464, spg: 1.0573, bpg: 0.9318, NO_DEF: 1.97, BASE: 1.3902, BPG_BEND: 2.5, BPG_EXTRA: 0, GAMES: 327, PROVISIONAL: false };
   // Score to wins: a power curve that matches all 132 games exactly (a straight line missed the 102.7 game).
   // 82 wins needs a score between 119.27 and 119.36 (narrowed by the 112.0 game); the upper end is used.
   const winsFor = s => Math.max(0, Math.min(32, Math.round(32 * Math.pow(Math.max(0, s) / 111.98, 1.1504))));   // exact on all 333 College games (30 Oct)
