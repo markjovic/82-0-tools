@@ -9,7 +9,7 @@
   //              (the pick after the "|" is the "otherwise take"), "RESTART", "NONE", "WAIT", "RESULT|74-8|109.2"
   //   r820.seq   increases every time the advice changes; r820.state has the same as structured fields.
   window.r820 = { version: null, next: 'WAIT', seq: 0, state: null, league: 'nba' };
-  const VERSION = 'v70';
+  const VERSION = 'v71';
   const LOG_KEY = 'r82log';
   const SLOTS = ['PG', 'SG', 'SF', 'PF', 'C'];
   const STATS = ['ppg', 'rpg', 'apg', 'spg', 'bpg'];
@@ -364,7 +364,7 @@
       const slotOf = pl => { const a = assign([...team, ...(pl.pair || [pl])], cur) || {}; return q => SLOTS.find(sl => a[sl] === q); };
       let head, sub;
       if (useBoost.kind === 'PRIME') { const sl = placement({ p: useBoost.p }).slot;
-        head = `PRIME: ${esc(useBoost.p.name)} &rarr; ${sl}`; sub = `Take him as his ${esc(useBoost.p.team?.abbr || '')} ${esc(useBoost.p.era || '')} stint: value ${val(useBoost.base).toFixed(1)} &rarr; ${useBoost.v.toFixed(1)}.`; }
+        head = `PRIME: ${esc(useBoost.p.name)} &rarr; ${sl}`; sub = `Take him as his ${esc(useBoost.p.team?.name || useBoost.p.team?.abbr || '')} ${esc(useBoost.p.era || '')} stint: value ${val(useBoost.base).toFixed(1)} &rarr; ${useBoost.v.toFixed(1)}.`; }
       else if (useBoost.kind === 'DOUBLE') { const f = slotOf({ pair: useBoost.pair });
         head = `DOUBLE PICK: ${esc(useBoost.pair[0].name)} &rarr; ${f(useBoost.pair[0])}, ${esc(useBoost.pair[1].name)} &rarr; ${f(useBoost.pair[1])}`; sub = 'Take both from this list.'; }
       else { head = `TRADE: ${esc(useBoost.out.name)} out, ${esc(useBoost.in.name)} in`; sub = `Then make this round's pick as normal.`; }
@@ -417,7 +417,7 @@
     const primeBit = c => { const pl = placement({ p: c.p }), rk = rankNum(c.p, pl.slot);
       const best = (c.p.positions || []).filter(x => SLOTS.includes(x)).map(x => [x, rankNum(c.p, x)]).sort((a, b) => a[1] - b[1])[0];
       const elsewhere = best && best[0] !== pl.slot && best[1] < rk ? ` <span style="opacity:.75">(#${best[1]} ${best[0]})</span>` : '';
-      return `<div style="margin:0 0 2px 14px;font-size:12px"><span style="${rk <= 10 ? '' : primeTone(rk)}">&#128081; prime &rarr; ${rankHtml(c.p, pl.slot, rk)} &middot; ${c.v.toFixed(1)} &middot; ${rec(c.avg)}${c.p82 >= 0.01 ? ` &middot; 82-0 ${pct(c.p82)}` : ''}</span>${elsewhere}</div>`; };
+      return `<div style="margin:0 0 2px 14px;font-size:12px"><span style="${rk <= 10 ? '' : primeTone(rk)}">&#128081; prime (${esc(c.p.team?.name || c.p.team?.abbr || '?')} ${esc(c.p.era || '')}) &rarr; ${rankHtml(c.p, pl.slot, rk)} &middot; ${c.v.toFixed(1)} &middot; ${rec(c.avg)}${c.p82 >= 0.01 ? ` &middot; 82-0 ${pct(c.p82)}` : ''}</span>${elsewhere}</div>`; };
     let opts = '';
     for (const e of shown) {
       if (e.kind === 'pick') { const c = e.c, pl = placement(c), pr = primeSims.find(x => String(x.base.player_id) === String(c.p.player_id));
@@ -538,7 +538,9 @@
       body = roster.map(r => `${esc(r.slot)} <b>${esc(r.player?.name)}</b> &middot; ${rankHtml(r.player, r.slot)} &middot; ${val(r.player).toFixed(1)}`).join('<br>');
       body = `<div style="margin:2px 0 4px">${body}</div>`;
       publish(`RESULT|${d.wins ?? ''}-${d.losses ?? ''}|${result.score}`, { type: 'RESULT', wins: d.wins, losses: d.losses, score: result.score, model: +pred.toFixed(1), roster: roster.map(r => ({ slot: r.slot, name: r.player?.name })) });
-    } else if (cell) { const a = advise(); banner = a.banner + (a.opts || ''); body = a.h;
+    } else if (cell) { const a = advise();
+      // the reel only shows the short name, so name the team in full above the advice
+      banner = `<div style="font:700 14px system-ui,sans-serif;margin:0 0 4px">${esc(cell.team?.name || cell.team?.abbr || '?')} &middot; ${esc(cell.era || '')}</div>` + a.banner + (a.opts || ''); body = a.h;
       const usedIds = new Set(SLOTS.filter(sl => picks[sl]).map(sl => String(picks[sl].player_id)));
       const offer = (cell.squad || []).filter(p => !usedIds.has(String(p.player_id))).map(p => ({ name: p.name, positions: p.positions, value: +val(p).toFixed(2),
         ranks: Object.fromEntries((p.positions || []).filter(x => SLOTS.includes(x)).map(x => [x, rankNum(p, x)])) }));
